@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import List, Optional
 
+from . import audio
 from .camelot import to_camelot
 from .genres import canonical_genre
 from .models import Track
@@ -58,6 +59,34 @@ def enrich_track(
     return deltas
 
 
+def analyze_track(track: Track) -> Optional[Track]:
+    """Estimate BPM/key for `track` from its own audio (Phase 3b backbone).
+
+    Returns a partial Track delta tagged with `audio` provenance (priority ties
+    Serato, beats Discogs/GetSongBPM), or None if no audio could be analysed.
+    """
+    res = audio.analyze_track_audio(track.artist, track.title)
+    if not res:
+        return None
+    bpm = res.get("bpm")
+    key_raw = res.get("key_raw")
+    camelot = to_camelot(key_raw)
+    prov = {}
+    if bpm is not None:
+        prov["bpm"] = "audio"
+    if key_raw:
+        prov["key_raw"] = "audio"
+    if camelot:
+        prov["camelot"] = "audio"
+    if not prov:
+        return None
+    return Track(
+        id=track.id, artist=track.artist, title=track.title,
+        bpm=bpm, key_raw=key_raw, camelot=camelot,
+        sources=["audio"], prov=prov,
+    )
+
+
 def seed_from_artist(
     discogs: DiscogsClient, artist_name: str, max_releases: int = 10,
 ) -> List[Track]:
@@ -75,10 +104,17 @@ def seed_from_artist(
         styles = rel["styles"] or rel["genres"]
         genre = canonical_genre(styles)
         rel_artist = rel.get("artist") or artist_name
-        for title in rel["tracks"]:
+        mixed = rel.get("mixed")
+        for tr in rel["tracks"]:
+            # The real producer is the per-track artist; only fall back to the
+            # release artist when a track carries no credit of its own.
+            producer = " & ".join(a for a in tr["artists"] if a) or rel_artist
+            # On a DJ-mix comp, the release artist is the curator, not the maker.
+            curators = ([rel_artist] if mixed and _norm(producer) != _norm(rel_artist)
+                        else [])
             t = Track(
-                artist=rel_artist, title=title,
-                genre=genre, styles=styles,
+                artist=producer, title=tr["title"],
+                genre=genre, styles=styles, curators=curators,
                 label=rel.get("label"), year=rel.get("year"),
                 sources=["discogs"],
             )
@@ -86,3 +122,7 @@ def seed_from_artist(
                 seen.add(t.id)
                 out.append(t)
     return out
+
+
+def _norm(s: str) -> str:
+    return (s or "").strip().lower()

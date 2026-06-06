@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS tracks (
     energy     REAL,
     genre      TEXT,
     styles     TEXT,
+    curators   TEXT,
     label      TEXT,
     year       INTEGER,
     play_count INTEGER,
@@ -50,8 +51,8 @@ CREATE INDEX IF NOT EXISTS idx_tracks_genre ON tracks(genre);
 
 _COLUMNS = [
     "id", "tidal_id", "artist", "title", "album", "bpm", "key_raw", "camelot",
-    "loudness", "energy", "genre", "styles", "label", "year", "play_count",
-    "art_path", "sources", "prov", "extra",
+    "loudness", "energy", "genre", "styles", "curators", "label", "year",
+    "play_count", "art_path", "sources", "prov", "extra",
 ]
 
 
@@ -84,6 +85,7 @@ def merge_tracks(base: Track, inc: Track) -> Track:
     if not base.title:
         base.title = inc.title
     base.play_count = max(base.play_count, inc.play_count)
+    base.curators = sorted(set(base.curators) | set(inc.curators))
     base.sources = sorted(set(base.sources) | set(inc.sources))
     base.extra.update(inc.extra)
     return base
@@ -93,8 +95,9 @@ def _track_to_row(t: Track) -> tuple:
     return (
         t.id, t.tidal_id, t.artist, t.title, t.album, t.bpm, t.key_raw,
         t.camelot, t.loudness, t.energy, t.genre, json.dumps(t.styles),
-        t.label, t.year, t.play_count, t.art_path, json.dumps(t.sources),
-        json.dumps(t.prov), json.dumps(t.extra) if t.extra else None,
+        json.dumps(t.curators), t.label, t.year, t.play_count, t.art_path,
+        json.dumps(t.sources), json.dumps(t.prov),
+        json.dumps(t.extra) if t.extra else None,
     )
 
 
@@ -114,6 +117,7 @@ def _row_to_track(row: sqlite3.Row) -> Track:
         energy=row["energy"],
         genre=row["genre"],
         styles=jload(row["styles"], []),
+        curators=jload(row["curators"], []),
         label=row["label"],
         year=row["year"],
         play_count=row["play_count"] or 0,
@@ -131,6 +135,15 @@ class Catalog:
         self.conn = sqlite3.connect(self.db_path)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(_SCHEMA)
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """Add columns introduced after a DB was first created."""
+        have = {r["name"] for r in self.conn.execute("PRAGMA table_info(tracks)")}
+        for col in _COLUMNS:
+            if col not in have:
+                self.conn.execute(f"ALTER TABLE tracks ADD COLUMN {col} TEXT")
+        self.conn.commit()
 
     def close(self) -> None:
         self.conn.close()

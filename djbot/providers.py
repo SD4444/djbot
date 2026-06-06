@@ -84,33 +84,53 @@ class DiscogsClient:
         return results[0].get("id") if results else None
 
     def artist_release_ids(self, name: str, max_releases: int = 10) -> List[int]:
-        """Main-role release ids for an artist (bounded)."""
+        """Main-role release ids for an artist (bounded).
+
+        Discogs interleaves `master`/`remix` entries with actual releases, so we
+        over-fetch a wide page and cap to `max_releases` AFTER filtering — otherwise
+        a narrow page can be almost entirely masters and yield nearly nothing.
+        """
         aid = self.artist_id(name)
         if aid is None:
             return []
         data = self._get(f"/artists/{aid}/releases", {
-            "sort": "year", "sort_order": "desc", "per_page": max_releases,
+            "sort": "year", "sort_order": "desc", "per_page": 100,
         })
         ids = []
         for r in (data or {}).get("releases", []):
             if r.get("role") == "Main" and r.get("type") == "release":
                 ids.append(r["id"])
-        return ids[:max_releases]
+                if len(ids) >= max_releases:
+                    break
+        return ids
 
     def release(self, release_id: int) -> Optional[dict]:
-        """A release -> {styles, genres, label, year, tracks:[title,...]}."""
+        """A release -> {styles, genres, label, year, artist, mixed, tracks}.
+
+        ``mixed`` is True for DJ-mix compilations (Discogs tags them "Mixed" in the
+        format descriptions). Each track carries its OWN ``artists`` (the real
+        producer) — on a comp these differ from the release artist, who is just the
+        DJ that compiled it.
+        """
         data = self._get(f"/releases/{release_id}", {})
         if not data:
             return None
         labels = data.get("labels") or []
-        tracks = [t.get("title") for t in data.get("tracklist", [])
-                  if t.get("title") and t.get("type_") == "track"]
+        descs = {d for f in (data.get("formats") or [])
+                 for d in (f.get("descriptions") or [])}
+        tracks = [
+            {"title": t.get("title"),
+             "artists": [a.get("name", "") for a in (t.get("artists") or [])]}
+            for t in data.get("tracklist", [])
+            if t.get("title") and t.get("type_") == "track"
+        ]
         return {
             "styles": data.get("styles", []),
             "genres": data.get("genres", []),
             "label": labels[0].get("name") if labels else None,
             "year": _to_int(data.get("year")),
             "artist": (data.get("artists") or [{}])[0].get("name", ""),
+            "mixed": "Mixed" in descs,
             "tracks": tracks,
         }
 

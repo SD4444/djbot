@@ -5,6 +5,12 @@ description = "A DJ assistant that suggests harmonically and rhythmically compat
 requires-python = ">=3.9"
 dependencies = []
 
+# Phase 3b audio analysis is optional so the core stays stdlib-only.
+# Install with:  pip install "djbot[audio]"   (also requires ffmpeg on PATH).
+# Previews come from free no-auth APIs (iTunes/Deezer) via stdlib — no yt-dlp.
+[project.optional-dependencies]
+audio = ["librosa"]
+
 [project.scripts]
 djbot = "djbot.cli:main"
 

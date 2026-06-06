@@ -48,6 +48,7 @@ class Track:
     energy: Optional[float] = None     # 0..1, from enrichment
     genre: Optional[str] = None        # canonical (see genres.py)
     styles: List[str] = field(default_factory=list)  # raw source tags
+    curators: List[str] = field(default_factory=list)  # DJs who mixed/played it (Digweed, ...)
     label: Optional[str] = None
     year: Optional[int] = None
     play_count: int = 0

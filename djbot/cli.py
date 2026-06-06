@@ -10,9 +10,10 @@ from __future__ import annotations
 import argparse
 from typing import List
 
+from . import audio
 from . import config as cfg
 from .catalog import Catalog
-from .enrichment import enrich_track, seed_from_artist
+from .enrichment import analyze_track, enrich_track, seed_from_artist
 from .models import Track
 from .providers import DiscogsClient, GetSongBPMClient
 from .recommender import Weights, build_runway, recommend_next
@@ -154,6 +155,32 @@ def cmd_enrich(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_analyze(args: argparse.Namespace) -> int:
+    ok, why = audio.available()
+    if not ok:
+        print(f"  ! audio analysis unavailable ({why}).")
+        print("    install with: pip install librosa  (also needs ffmpeg on PATH)")
+        return 1
+    with Catalog(args.db) as cat:
+        targets = (cat.all_tracks() if args.all
+                   else cat.needing_enrichment(fields=("bpm", "camelot")))
+        if args.limit:
+            targets = targets[:args.limit]
+        print(f"Analysing audio for {len(targets)} track(s)… (downloads previews)")
+        done = 0
+        for t in targets:
+            delta = analyze_track(t)
+            if delta:
+                cat.upsert([delta])
+                done += 1
+                print(f"  ✓ {delta.camelot or '?':<3} {_fmt_bpm(delta.bpm).strip():>5} "
+                      f"BPM  {t.label_str}")
+            else:
+                print(f"  · no audio match: {t.label_str}")
+    print(f"Done. Analysed {done} track(s).")
+    return 0
+
+
 def cmd_seed(args: argparse.Namespace) -> int:
     discogs, _ = _make_clients(need_discogs=True, need_bpm=False)
     if discogs is None:
@@ -222,6 +249,12 @@ def build_parser() -> argparse.ArgumentParser:
                    help="re-enrich every track, not just those missing data")
     e.add_argument("--limit", type=int, default=0, help="cap how many tracks to process")
     e.set_defaults(func=cmd_enrich)
+
+    a = sub.add_parser("analyze", help="estimate BPM/key from free preview audio (iTunes/Deezer + librosa)")
+    a.add_argument("--all", action="store_true",
+                   help="re-analyse every track, not just those missing BPM/key")
+    a.add_argument("--limit", type=int, default=0, help="cap how many tracks to process")
+    a.set_defaults(func=cmd_analyze)
 
     sd = sub.add_parser("seed", help="grow the universe from an artist's Discogs catalog")
     sd.add_argument("artist", nargs="+", help="artist name(s) to pull, e.g. \"John Digweed\"")

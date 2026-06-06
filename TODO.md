@@ -1,27 +1,21 @@
 # djbot — TODO / where we left off
 
-_Last session: 2026-06-06. Phases 1, 2, and the Phase 3 enrichment backbone are done._
+_Last session: 2026-06-06. Discogs is LIVE; GetSongBPM is dead (Cloudflare); per-track
+attribution + curator signal shipped. Catalog at 147 tracks (97 with a curator)._
 
 ## ▶️ Pick up here (next session)
 
-### 1. Go live with enrichment (needs Simon — 5 min)
-- [ ] Get a free **Discogs personal token**: https://www.discogs.com/settings/developers
-- [ ] Get a free **GetSongBPM API key**: https://getsongbpm.com/api
-- [ ] Save them:
-      ```
-      python3 -m djbot config set discogs_token <TOKEN>
-      python3 -m djbot config set getsongbpm_key <KEY>
-      ```
-- [ ] First live run + sanity check coverage:
-      ```
-      python3 -m djbot seed "John Digweed" "Patrice Bäumel"
-      python3 -m djbot enrich
-      python3 -m djbot list
-      ```
+### 1. Run audio analysis across the whole pool + clean up
+Phase 3b works (`djbot analyze`). Deps live in `.venv/` (librosa + ffmpeg). Run:
+`PATH=/opt/homebrew/bin:$PATH .venv/bin/python -m djbot analyze`  (downloads previews, local/free).
+- [ ] Run `analyze` over all 147 tracks (only 5 done so far).
+- [ ] **Purge the 16 Serato test tracks** (ABBA/Madonna/etc. — random disco/pop, not Simon's
+      taste). They pollute `next`/`runway`. Delete by id or re-scan with a real Serato lib.
+- [ ] Spot-check a few BPM/key estimates against what you know — note accuracy.
 
-### 2. Validate the two unverified bits (do on first live run)
-- [ ] Confirm **GetSongBPM response fields** (`tempo`, `key_of`) match `providers.py:GetSongBPMClient.lookup` — tweak if the live JSON differs.
-- [ ] Eyeball **Discogs match quality** on niche tracks — note miss rate (drives Phase 3b).
+### 2. Use the curator signal in scoring
+- [ ] Add a curation boost to `recommender.Weights` — a candidate a DJ Simon admires has
+      played/mixed (`Track.curators`) should score higher. 97 tracks already carry this.
 
 ## 🔜 Next phases
 - [ ] **Phase 3b — own audio analysis** (Essentia/librosa on 30s previews): free,
@@ -49,4 +43,12 @@ _Last session: 2026-06-06. Phases 1, 2, and the Phase 3 enrichment backbone are 
 - Phase 1: Serato TIDAL XML → catalog (`scan`, `list`).
 - Phase 2: recommender (`next`, `runway`) — Camelot + BPM (half/double) + energy + lookahead.
 - Phase 3 backbone: canonical-id dedup + provenance merge; Discogs + GetSongBPM providers;
-  `enrich`, `seed`, `config` commands. Logic verified offline (not yet run live).
+  `enrich`, `seed`, `config` commands.
+- Discogs LIVE: token saved; fixed `artist_release_ids` to over-fetch+filter (was yielding 1).
+- Per-track attribution + **curator signal**: `release()` returns per-track artists + `mixed`;
+  `seed_from_artist` credits the real producer and records the mixing DJ in new
+  `Track.curators` (catalog column + auto-migrate + merge union). Free MixesDB-style signal.
+- GetSongBPM: confirmed dead (Cloudflare "Just a moment" JS challenge on the whole API host).
+- **Phase 3b audio analysis** (`djbot analyze`): own BPM/key backbone. yt-dlp/YouTube ruled
+  out (PO-token wall); pivoted to free no-auth iTunes + Deezer 30s previews + librosa
+  (BPM via beat_track, key via Krumhansl–Kessler chroma). `prov=audio`. Verified on 5 tracks.
