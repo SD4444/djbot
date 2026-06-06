@@ -1,0 +1,16 @@
+[project]
+name = "djbot"
+version = "0.1.0"
+description = "A DJ assistant that suggests harmonically and rhythmically compatible next tracks for TIDAL + Serato sets."
+requires-python = ">=3.9"
+dependencies = []
+
+[project.scripts]
+djbot = "djbot.cli:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["djbot"]
