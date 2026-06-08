@@ -41,6 +41,15 @@ class Weights:
     # Penalty applied to half/double-time matches (still useful, but a bigger
     # move than a straight tempo match).
     octave_penalty: float = 0.1
+    # --- Fader / directional steering (Phase 4) ---
+    # When the user drags the fader, each next track should still be mixable
+    # (harmonic + bpm) AND nudge the set's tempo/energy in the chosen direction.
+    # `steer` weights that directional progress; `step_bpm` is the BPM move we
+    # aim for per track at full fader; `progress_window` is how far off-target a
+    # candidate can be before the progress reward decays to zero.
+    steer: float = 0.30
+    step_bpm: float = 5.0
+    progress_window: float = 8.0
 
 
 @dataclass
@@ -218,6 +227,125 @@ def build_runway(
                     path + [s],
                     used | {s.track.id},
                     s.track,
+                ))
+        if not nxt:
+            break
+        nxt.sort(key=lambda x: x[0], reverse=True)
+        beams = nxt[:beam_width]
+
+    if not beams or not beams[0][1]:
+        return []
+    return beams[0][1]
+
+
+def _progress_score(
+    current_bpm: Optional[float],
+    cand_bpm: Optional[float],
+    intensity: float,
+    step_bpm: float,
+    window: float,
+) -> tuple[float, Optional[str]]:
+    """Reward a candidate for moving tempo in the fader's direction.
+
+    `intensity` is the fader: -1 (descend) .. 0 (hold) .. +1 (climb). The target
+    is `current_bpm + intensity*step_bpm`; the score peaks at the target and
+    decays linearly to 0 at `window` BPM away. With intensity 0 this rewards
+    holding tempo, so the fader's centre behaves like "same vibe".
+    """
+    if not current_bpm or not cand_bpm:
+        return 0.0, None
+    delta = cand_bpm - current_bpm
+    if abs(intensity) <= 0.05:
+        # Fader centred: reward holding the tempo (proximity to current).
+        return max(0.0, 1.0 - abs(delta) / window), None
+    # Fader pushed: reward movement IN the chosen direction, peaking when the
+    # step reaches ~intensity*step_bpm. Staying put (delta 0) scores 0, so the
+    # mixability term no longer pins the set in place; wrong-way moves score 0.
+    ideal = abs(intensity) * step_bpm
+    moved = delta if intensity > 0 else -delta   # signed toward the goal
+    if moved <= 0:
+        return 0.0, None
+    score = min(moved / ideal, 1.0) if ideal else 0.0
+    arrow = "↑" if intensity > 0 else "↓"
+    return score, f"tempo {arrow} {current_bpm:.0f}→{cand_bpm:.0f}"
+
+
+def score_steered(
+    current: Track,
+    cand: Track,
+    intensity: float,
+    weights: Weights = Weights(),
+) -> Suggestion:
+    """Score a transition for the fader: stay mixable, but move in `intensity`.
+
+    Blends harmonic compatibility + BPM mixability (so it's still playable) with
+    a directional-progress term (so the set drifts the chosen way) + curation.
+    Genre drift is emergent: as the path's BPM climbs, higher-tempo genres
+    (trance→goa→dnb) naturally start out-scoring house candidates.
+    """
+    reasons: List[str] = []
+
+    h = harmonic_score(current.camelot, cand.camelot)
+    rel = compatibility(current.camelot, cand.camelot)
+    if cand.camelot:
+        reasons.append(f"{cand.camelot} · {_REL_TEXT[rel]}")
+
+    b, bnote = bpm_match(
+        current.bpm, cand.bpm, weights.bpm_tolerance, weights.octave_penalty
+    )
+    if bnote:
+        reasons.append(bnote)
+
+    p, pnote = _progress_score(
+        current.bpm, cand.bpm, intensity, weights.step_bpm, weights.progress_window
+    )
+    if pnote:
+        reasons.append(pnote)
+
+    c, cnote = curation_score(cand)
+    if cnote:
+        reasons.append(cnote)
+
+    total = (
+        weights.harmonic * h
+        + weights.bpm * b
+        + weights.steer * p
+        + weights.curation * c
+    )
+    return Suggestion(track=cand, score=round(total, 4), reasons=reasons)
+
+
+def steer(
+    start: Track,
+    pool: Sequence[Track],
+    intensity: float,
+    *,
+    depth: int = 4,
+    weights: Weights = Weights(),
+    beam_width: int = 4,
+) -> List[Suggestion]:
+    """Plan a smooth `depth`-track path that steers the set per the fader.
+
+    `intensity` in [-1, 1]: positive climbs tempo/energy (and drifts toward
+    faster genres), negative cools it down, ~0 holds the vibe. Beam search over
+    `score_steered`, never repeating a track — same machinery as `build_runway`
+    but each step is scored for directional progress as well as mixability.
+    """
+    intensity = max(-1.0, min(1.0, intensity))
+    beams: List[tuple[float, List[Suggestion], set, Track]] = [
+        (0.0, [], {start.id}, start)
+    ]
+    for _ in range(depth):
+        nxt: List[tuple[float, List[Suggestion], set, Track]] = []
+        for cum, path, used, last in beams:
+            scored = [
+                score_steered(last, t, intensity, weights)
+                for t in pool if t.id not in used
+            ]
+            scored.sort(key=lambda s: s.score, reverse=True)
+            for s in scored[:beam_width]:
+                nxt.append((
+                    cum + s.score, path + [s], used | {s.track.id}, s.track,
                 ))
         if not nxt:
             break
