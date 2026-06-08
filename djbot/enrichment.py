@@ -65,7 +65,7 @@ def analyze_track(track: Track) -> Optional[Track]:
     Returns a partial Track delta tagged with `audio` provenance (priority ties
     Serato, beats Discogs/GetSongBPM), or None if no audio could be analysed.
     """
-    res = audio.analyze_track_audio(track.artist, track.title)
+    res = audio.analyze_track_audio(track.artist, track.title, track.genre)
     if not res:
         return None
     bpm = res.get("bpm")

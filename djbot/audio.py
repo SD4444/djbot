@@ -96,20 +96,39 @@ def _download(url: str, dest: Path) -> Optional[Path]:
     return dest if dest.stat().st_size > 1024 else None
 
 
-def _normalize_tempo(
-    bpm: float, center: float = 125.0, lo: float = 100.0, hi: float = 140.0
-) -> float:
+# Per-genre plausible tempo bands (center, lo, hi) used to fold librosa's metric
+# misdetections back to the true tempo. Keyed by substrings matched against a
+# track's genre. Order matters: more specific genres before broader ones.
+_TEMPO_BANDS = (
+    ("drum_and_bass", (174.0, 160.0, 185.0)),
+    ("jungle",        (172.0, 158.0, 185.0)),
+    ("goa",           (145.0, 135.0, 152.0)),   # goa_psytrance, psytrance
+    ("psy",           (145.0, 135.0, 152.0)),
+    ("dubstep",       (140.0, 134.0, 150.0)),
+    ("trance",        (138.0, 128.0, 146.0)),   # incl. progressive_trance
+    ("downtempo",     (90.0,  70.0,  110.0)),
+)
+_DEFAULT_BAND = (125.0, 100.0, 140.0)  # house/prog/deep/tech/techno/minimal/etc.
+
+
+def _band_for_genre(genre: Optional[str]) -> tuple[float, float, float]:
+    g = (genre or "").lower()
+    for key, band in _TEMPO_BANDS:
+        if key in g:
+            return band
+    return _DEFAULT_BAND
+
+
+def _normalize_tempo(bpm: float, genre: Optional[str] = None) -> float:
     """Fold a metric-misdetection back into a plausible dance band.
 
     librosa's beat tracker often reports a metric sub-/super-multiple of the
-    true tempo (e.g. 83.4 for a 125 BPM track, 63 for 126, 172 for ~129). When
-    the raw estimate lands outside [lo, hi], we pick the multiple
-    (½, ⅔, ¾, 1, 4⁄3, 1.5, 2) closest to `center` and inside the band.
-
-    Defaults target house/prog/techno (the catalog today). A DnB-heavy library
-    would want a higher center/band — known limitation, revisit when genres
-    that genuinely live >140 BPM get seeded.
+    true tempo (e.g. 83.4 for a 125 BPM house track, 87 for a 174 DnB track).
+    We pick the band for the track's genre, and when the raw estimate lands
+    outside it, fold by the multiple (½, ⅔, ¾, 1, 4⁄3, 1.5, 2) closest to the
+    band's center. Unknown genre → house/techno band (~125).
     """
+    center, lo, hi = _band_for_genre(genre)
     if bpm <= 0 or lo <= bpm <= hi:
         return bpm
     cands = [bpm * m for m in (0.5, 2 / 3, 0.75, 1.0, 4 / 3, 1.5, 2.0)]
@@ -117,7 +136,7 @@ def _normalize_tempo(
     return round(min(in_band or cands, key=lambda v: abs(v - center)), 1)
 
 
-def analyze_file(path: Path) -> Optional[dict]:
+def analyze_file(path: Path, genre: Optional[str] = None) -> Optional[dict]:
     """Estimate {bpm, key_raw} from an audio file. None if it can't be read."""
     import librosa  # lazy
     import numpy as np
@@ -130,7 +149,7 @@ def analyze_file(path: Path) -> Optional[dict]:
         return None
 
     tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
-    bpm = _normalize_tempo(float(np.atleast_1d(tempo)[0]))
+    bpm = _normalize_tempo(float(np.atleast_1d(tempo)[0]), genre)
     key_raw = _estimate_key(y, sr)
     if bpm <= 0 and not key_raw:
         return None
@@ -161,7 +180,9 @@ def _estimate_key(y, sr) -> Optional[str]:
     return _NOTES[tonic] + mode
 
 
-def analyze_track_audio(artist: str, title: str) -> Optional[dict]:
+def analyze_track_audio(
+    artist: str, title: str, genre: Optional[str] = None
+) -> Optional[dict]:
     """End-to-end: find a preview for artist/title, download, analyse. None on fail."""
     url = find_preview_url(artist, title)
     if not url:
@@ -170,4 +191,4 @@ def analyze_track_audio(artist: str, title: str) -> Optional[dict]:
         clip = _download(url, Path(tmp) / "preview.m4a")
         if clip is None:
             return None
-        return analyze_file(clip)
+        return analyze_file(clip, genre)
