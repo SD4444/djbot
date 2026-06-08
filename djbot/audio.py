@@ -96,6 +96,27 @@ def _download(url: str, dest: Path) -> Optional[Path]:
     return dest if dest.stat().st_size > 1024 else None
 
 
+def _normalize_tempo(
+    bpm: float, center: float = 125.0, lo: float = 100.0, hi: float = 140.0
+) -> float:
+    """Fold a metric-misdetection back into a plausible dance band.
+
+    librosa's beat tracker often reports a metric sub-/super-multiple of the
+    true tempo (e.g. 83.4 for a 125 BPM track, 63 for 126, 172 for ~129). When
+    the raw estimate lands outside [lo, hi], we pick the multiple
+    (½, ⅔, ¾, 1, 4⁄3, 1.5, 2) closest to `center` and inside the band.
+
+    Defaults target house/prog/techno (the catalog today). A DnB-heavy library
+    would want a higher center/band — known limitation, revisit when genres
+    that genuinely live >140 BPM get seeded.
+    """
+    if bpm <= 0 or lo <= bpm <= hi:
+        return bpm
+    cands = [bpm * m for m in (0.5, 2 / 3, 0.75, 1.0, 4 / 3, 1.5, 2.0)]
+    in_band = [c for c in cands if lo <= c <= hi]
+    return round(min(in_band or cands, key=lambda v: abs(v - center)), 1)
+
+
 def analyze_file(path: Path) -> Optional[dict]:
     """Estimate {bpm, key_raw} from an audio file. None if it can't be read."""
     import librosa  # lazy
@@ -109,7 +130,7 @@ def analyze_file(path: Path) -> Optional[dict]:
         return None
 
     tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
-    bpm = float(np.atleast_1d(tempo)[0])
+    bpm = _normalize_tempo(float(np.atleast_1d(tempo)[0]))
     key_raw = _estimate_key(y, sr)
     if bpm <= 0 and not key_raw:
         return None

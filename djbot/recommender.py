@@ -33,6 +33,10 @@ class Weights:
     harmonic: float = 0.55
     bpm: float = 0.40
     energy: float = 0.05
+    # Quality/adjacency prior: reward candidates a DJ we trust has actually
+    # played or mixed (Track.curators). Modest, so harmony/BPM still decide the
+    # mix; this only nudges between otherwise-comparable picks.
+    curation: float = 0.10
     bpm_tolerance: float = 0.06   # fraction; ~6% is a comfortable beatmatch
     # Penalty applied to half/double-time matches (still useful, but a bigger
     # move than a straight tempo match).
@@ -109,6 +113,21 @@ def energy_match(
     return 0.5, None  # "any"
 
 
+def curation_score(cand: Track) -> tuple[float, Optional[str]]:
+    """Reward a candidate that DJs we trust have played/mixed.
+
+    The catalog's curators are seeded from DJs the user rates (Digweed, Bäumel,
+    …), so any curator at all is a positive signal — a free MixesDB-style
+    adjacency/quality prior. More distinct curators = a stronger signal, ramped
+    gently and capped at 1.0.
+    """
+    curators = [c for c in (cand.curators or []) if c]
+    if not curators:
+        return 0.0, None
+    score = min(0.7 + 0.15 * (len(curators) - 1), 1.0)
+    return score, "played by " + ", ".join(curators)
+
+
 def score_transition(
     current: Track,
     cand: Track,
@@ -132,7 +151,16 @@ def score_transition(
     if enote:
         reasons.append(enote)
 
-    total = weights.harmonic * h + weights.bpm * b + weights.energy * e
+    c, cnote = curation_score(cand)
+    if cnote:
+        reasons.append(cnote)
+
+    total = (
+        weights.harmonic * h
+        + weights.bpm * b
+        + weights.energy * e
+        + weights.curation * c
+    )
     return Suggestion(track=cand, score=round(total, 4), reasons=reasons)
 
 
