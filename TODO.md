@@ -58,8 +58,14 @@ Data foundation is DONE: 908 tracks, 6 genres, 781 analyzed (86%), curator signa
 - **Phase 3b audio analysis** (`djbot analyze`): own BPM/key backbone. yt-dlp/YouTube ruled
   out (PO-token wall); pivoted to free no-auth iTunes + Deezer 30s previews + librosa
   (BPM via beat_track, key via Krumhansl–Kessler chroma). `prov=audio`.
-- **2026-06-08 session:** purged 16 Serato test tracks (→131); ran `analyze` across the pool
-  (98/131 now have BPM+key, 33 no preview); fixed librosa octave/metric errors — `_normalize_tempo`
-  folds out-of-band reads (83.4→125, 63→126, 172→129) toward a house band, nulled beatless
-  "Ambient Mix" tracks; shipped the **curator boost** (`Weights.curation`=0.10, "played by …"
-  reason). Wrote CLAUDE.md. Backups: `data/catalog.db.{bak,preBPMfix}`.
+- **2026-06-08 session:** purged 16 Serato test tracks; ran `analyze`; fixed librosa
+  octave/metric errors — `_normalize_tempo` (now genre-aware: dnb~174/goa~145/trance~138/
+  house~125); shipped **curator boost** (`Weights.curation`=0.10). Wrote CLAUDE.md.
+- **Diversified the pool:** seeded 17 artists (prog-trance / liquid dnb / goa) → **908 tracks,
+  6+ genres**, 781 analyzed (86%), per-genre BPM averages correct.
+- **Steering fader engine:** `recommender.steer()` + `score_steered`/`_progress_score` — smooth
+  multi-track hold/climb/cool path; climb drifts genres (house→goa) on the full pool.
+- **Phase 4 v1 cockpit:** `djbot/server.py` (stdlib http.server + JSON API) + `djbot/web/index.html`
+  (spacecraft flight-deck UI, starfield, neon-blue/violet, 3 modes). `python3 -m djbot.server`
+  → localhost:8765. Project skill `.claude/skills/run-cockpit` added.
+- Backups: `data/catalog.db.{bak,preBPMfix}`. Detector-upgrade options noted in memory.

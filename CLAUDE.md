@@ -71,5 +71,18 @@ pool, purge the 16 Serato test tracks, then wire `Track.curators` into
 `camelot.py` key↔Camelot + compat scoring · `serato.py` Serato XML parser ·
 `models.py` Track model + SOURCE_PRIORITY · `catalog.py` SQLite catalog + merge ·
 `providers.py` Discogs/GetSongBPM · `enrichment.py` enrich/seed · `audio.py`
-preview fetch + librosa analysis · `genres.py` · `recommender.py` next/runway ·
-`config.py` · `cli.py` / `__main__.py` entry points.
+preview fetch + librosa analysis + genre-aware `_normalize_tempo` fold · `genres.py` ·
+`recommender.py` next/runway + `steer()` fader · `server.py` + `web/index.html` Phase 4
+cockpit (stdlib http.server JSON API + flight-deck UI) · `config.py` · `cli.py` /
+`__main__.py` entry points.
+
+## Running the cockpit (Phase 4)
+`python3 -m djbot.server` → http://localhost:8765 (stdlib-only; reachable from a phone
+on the same wifi). Now-playing is manual (search). Steering fader = `recommender.steer`.
+Audio analysis is the only thing needing the venv: `PATH=/opt/homebrew/bin:$PATH
+.venv/bin/python -m djbot analyze`.
+
+## BPM detector note
+librosa is octave-error-prone; `_normalize_tempo` is a genre-aware band-aid (works, genre
+averages correct). A detector upgrade (tempo-cnn / madmom / Essentia) is queued as a future
+bake-off — see the `djbot-bpm-detectors` memory. Don't pivot detectors casually.
