@@ -196,6 +196,55 @@ def cmd_seed(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_vibe(args: argparse.Namespace) -> int:
+    import difflib
+    from . import cosine
+    from .catalog import Catalog
+    from .models import make_id
+
+    with Catalog(args.db) as cat:
+        seed = cat.find_one(" ".join(args.query))
+        if seed is None:
+            print("no catalog track matches that query.")
+            return 1
+        try:
+            match = cosine.resolve(seed.artist, seed.title)
+        except cosine.CosineError as e:
+            print(f"cosine error: {e}")
+            return 1
+        if match is None:
+            print(f"'{seed}' not found on cosine.club (underground DB — may be absent).")
+            return 0
+        cands = cosine.similar(match["cosine_id"], limit=args.limit)
+        print(f"~ same vibe as: {seed}")
+        print(f"  (cosine match: {match['artist']} — {match['title']})\n")
+        pool = cat.all_tracks()
+        in_pool = 0
+        for c in cands:
+            hit = cat.get(make_id(c["artist"], c["title"]))
+            if hit is None:  # fall back to fuzzy match against the pool
+                best, br = None, 0.72
+                tgt = f"{c['artist']} {c['title']}".lower()
+                for t in pool:
+                    rr = difflib.SequenceMatcher(
+                        None, f"{t.artist} {t.title}".lower(), tgt).ratio()
+                    if rr >= br:
+                        best, br = t, rr
+                hit = best
+            score = c.get("score")
+            sc = f"{score:.3f}" if isinstance(score, (int, float)) else "  ·  "
+            if hit:
+                in_pool += 1
+                tag = f"IN POOL · {hit.camelot or '?'} · {round(hit.bpm) if hit.bpm else '—'} BPM · {hit.genre or '—'}"
+            else:
+                tag = "NEW · not yet analysed (would enrich on add)"
+            print(f"  {sc}  {c['artist']} — {c['title']}")
+            print(f"           {tag}")
+        print(f"\n{len(cands)} similar · {in_pool} already in your pool · "
+              f"{len(cands) - in_pool} new to discover.")
+    return 0
+
+
 def cmd_config(args: argparse.Namespace) -> int:
     if args.action == "set":
         cfg.set_key(args.name, args.value)
@@ -256,6 +305,11 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("--limit", type=int, default=0, help="cap how many tracks to process")
     a.set_defaults(func=cmd_analyze)
 
+    v = sub.add_parser("vibe", help="find sonically-similar tracks via cosine.club audio embeddings")
+    v.add_argument("query", nargs="+", help="a track in your catalog to seed from")
+    v.add_argument("--limit", type=int, default=15, help="how many similar tracks to show")
+    v.set_defaults(func=cmd_vibe)
+
     sd = sub.add_parser("seed", help="grow the universe from an artist's Discogs catalog")
     sd.add_argument("artist", nargs="+", help="artist name(s) to pull, e.g. \"John Digweed\"")
     sd.add_argument("--max-releases", type=int, default=10, dest="max_releases",
@@ -266,7 +320,7 @@ def build_parser() -> argparse.ArgumentParser:
     csub = c.add_subparsers(dest="action", required=True)
     csub.add_parser("show", help="show configured keys").set_defaults(action="show")
     cset = csub.add_parser("set", help="set a key")
-    cset.add_argument("name", choices=["discogs_token", "getsongbpm_key"])
+    cset.add_argument("name", choices=["discogs_token", "getsongbpm_key", "cosine_key"])
     cset.add_argument("value")
     cset.set_defaults(action="set")
     c.set_defaults(func=cmd_config)

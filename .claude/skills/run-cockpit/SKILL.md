@@ -7,14 +7,16 @@ description: Launch the djbot Phase 4 cockpit web panel (the live "play next" UI
 
 The cockpit is a stdlib-only local web server (`djbot/server.py`) that serves the
 flight-deck UI (`djbot/web/index.html`) and a JSON API wrapping the recommender +
-catalog. It reads `data/catalog.db`. No venv or extra deps are needed to *serve*
-(only `analyze` needs the venv/librosa/ffmpeg).
+catalog. It reads `data/catalog.db`.
 
 ## Launch it
-Run from the project root, in the background (it runs until stopped):
+Run from the project root, in the background (it runs until stopped).
+**Launch from the venv** so the live **enrich-on-add** (Vibe+Mix discoveries → librosa
+BPM/key) works — system python serves fine but enrich will report "analysis offline":
 
 ```bash
-python3 -m djbot.server          # serves http://localhost:8765
+PATH=/opt/homebrew/bin:$PATH .venv/bin/python -m djbot.server   # serves http://localhost:8765
+# (plain `python3 -m djbot.server` also works, minus enrich-on-add)
 # options: --port 9000   --db path/to/catalog.db
 ```
 

@@ -4,6 +4,7 @@ Lookup order (later wins): config file -> environment variable. Nothing is ever
 committed — config lives at ~/.config/djbot/config.json. Get free keys at:
   - Discogs:     https://www.discogs.com/settings/developers  (personal token)
   - GetSongBPM:  https://getsongbpm.com/api                  (free, needs a backlink)
+  - cosine.club: https://cosine.club/account/api             (free, audio-similarity)
 """
 
 from __future__ import annotations
@@ -19,6 +20,9 @@ CONFIG_PATH = Path.home() / ".config" / "djbot" / "config.json"
 _ENV = {
     "discogs_token": "DISCOGS_TOKEN",
     "getsongbpm_key": "GETSONGBPM_API_KEY",
+    "cosine_key": "COSINE_API_KEY",
+    "tidal_client_id": "TIDAL_CLIENT_ID",
+    "tidal_client_secret": "TIDAL_CLIENT_SECRET",
 }
 
 
