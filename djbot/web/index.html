@@ -255,6 +255,7 @@
   .tcell.logbtn{cursor:pointer}
   .tcell.logbtn:hover{border-color:rgba(124,255,196,.5)}
   .tcell.logbtn .tv{color:var(--lime);text-shadow:var(--tl)}
+  #tidalToggle.on{border-color:var(--cyan)} #tidalToggle.on .tv{color:var(--cyan);text-shadow:var(--tc)}
   .logs{position:fixed;inset:0;z-index:50;display:none;align-items:center;justify-content:center;
     background:rgba(3,2,10,.82);backdrop-filter:blur(5px);-webkit-backdrop-filter:blur(5px);padding:24px}
   .logs.on{display:flex}
@@ -324,6 +325,7 @@
       <div class="tcell"><span class="tk">STARDATE</span><span class="tv" id="tStardate">—</span></div>
       <div class="tcell m"><span class="tk">GAL VECTOR</span><span class="tv" id="tCoord">—</span></div>
       <div class="tcell l"><span class="tk">CATALOG</span><span class="tv" id="stat">—</span></div>
+      <div class="tcell logbtn" id="tidalToggle"><span class="tk">TIDAL</span><span class="tv" id="tidalToggleV">ALL</span></div>
       <div class="tcell logbtn" id="logsBtn"><span class="tk">TRAVEL</span><span class="tv">⟐ LOGS</span></div>
       <div class="leds"><span class="led c"></span><span class="led m"></span><span class="led v"></span></div>
     </div>
@@ -428,7 +430,7 @@
 
 <script>
 const $ = s => document.querySelector(s);
-let state = { now:null, queue:[], mode:"next", intensity:0, source:"engine", vibeMode:"list" };
+let state = { now:null, queue:[], mode:"next", intensity:0, source:"engine", vibeMode:"list", tidalOnly:false };
 let searchMap = {}, suggMap = {}, vibeMap = {};
 const headTrack = () => state.queue.length ? state.queue[state.queue.length-1] : state.now;
 
@@ -696,7 +698,7 @@ function renderVibe(data, source, runway){
     return `<div class="card disc" data-k="${t._k}">
       <div class="rank">${lead}</div>
       <div class="cbody"><div class="ct">${esc(t.artist)} — ${esc(t.title)}</div><div class="cr">${sub}</div></div>
-      <div class="chips">${chips}</div></div>`;
+      <div class="chips">${chips}<span class="chip tidal">··</span></div></div>`;
   }).join("");
   L.querySelectorAll(".card[data-k]").forEach(c=>c.onclick=(e)=>{
     const t=vibeMap[c.dataset.k]; if(!t) return;
@@ -704,6 +706,7 @@ function renderVibe(data, source, runway){
     if(t.in_pool && t.id) enqueue({id:t.id,artist:t.artist,title:t.title,camelot:t.camelot,bpm:t.bpm,genre:t.genre});
     else enrichAdd(c, t);
   });
+  tidalFlags(L, items);
 }
 
 /* tap a NEW discovery → read its DNA (TIDAL + librosa BPM/key), then queue it */
@@ -761,17 +764,30 @@ function render(items){
   tidalFlags(L, items);
 }
 
-/* lazily flag which suggestions are playable on TIDAL */
+/* lazily flag which suggestions are playable on TIDAL (+ feed the filter) */
 function tidalFlags(L, items){
   const cards = L.querySelectorAll(".card");
   items.forEach((t,i)=>{
-    const el = cards[i] && cards[i].querySelector(".chip.tidal"); if(!el) return;
+    const card = cards[i]; const el = card && card.querySelector(".chip.tidal"); if(!el) return;
     api("/api/tidal?artist="+enc(t.artist)+"&title="+enc(t.title)).then(r=>{
       el.textContent = r.available ? "✓ TIDAL" : "no TIDAL";
       el.classList.add(r.available ? "ok" : "off");
+      card.dataset.tidal = r.available ? "yes" : "no";
+      applyTidalFilter();
     }).catch(()=>{ el.remove(); });
   });
 }
+function applyTidalFilter(){
+  document.querySelectorAll("#list .card").forEach(c=>{
+    c.style.display = (state.tidalOnly && c.dataset.tidal==="no") ? "none" : "";
+  });
+}
+$("#tidalToggle").onclick = ()=>{
+  state.tidalOnly = !state.tidalOnly;
+  $("#tidalToggleV").textContent = state.tidalOnly ? "ONLY" : "ALL";
+  $("#tidalToggle").classList.toggle("on", state.tidalOnly);
+  applyTidalFilter();
+};
 
 const esc = s => (s||"").replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
 const enc = s => encodeURIComponent(s);
