@@ -247,6 +247,10 @@ class _Handler(BaseHTTPRequestHandler):
             f = _WEB_DIR / "index.html"
             return self._send(f.read_bytes(), ctype="text/html; charset=utf-8")
 
+        if path in ("/console", "/console.html"):
+            f = _WEB_DIR / "console.html"
+            return self._send(f.read_bytes(), ctype="text/html; charset=utf-8")
+
         if path.startswith("/assets/"):
             f = (_WEB_DIR / path.lstrip("/")).resolve()
             assets = (_WEB_DIR / "assets").resolve()
@@ -278,6 +282,18 @@ class _Handler(BaseHTTPRequestHandler):
                 "camelot": (qs.get("camelot") or [None])[0],
                 "bpm": (qs.get("bpm") or [None])[0],
                 "genre": (qs.get("genre") or [None])[0]}))
+
+        if path == "/api/tidal":
+            a = (qs.get("artist") or [""])[0]
+            t = (qs.get("title") or [""])[0]
+            if not a:
+                return self._send({"error": "artist required"}, status=400)
+            try:
+                info = tidal.find(a, t)
+            except Exception:
+                info = None
+            return self._send({"available": bool(info),
+                               "tidal_id": (info or {}).get("tidal_id")})
 
         if path == "/api/sessions":
             return self._send(self.panel.sessions_list())

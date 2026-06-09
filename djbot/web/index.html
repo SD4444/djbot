@@ -235,6 +235,9 @@
   .chip{font-family:"Share Tech Mono",monospace;font-size:11px;padding:4px 9px;border-radius:7px;border:1px solid rgba(47,244,255,.3);color:var(--cyan);letter-spacing:.04em}
   .chip.bpm{color:var(--magenta);border-color:rgba(255,62,165,.34)}
   .chip.gen{color:var(--violet);border-color:rgba(154,107,255,.34);text-transform:capitalize}
+  .chip.tidal{color:var(--dim);border-color:var(--line);letter-spacing:.04em}
+  .chip.tidal.ok{color:var(--cyan);border-color:rgba(56,232,255,.45);text-shadow:var(--tc)}
+  .chip.tidal.off{color:var(--dim);opacity:.5;border-style:dashed}
   .chip.ok{color:var(--lime);border-color:rgba(124,255,196,.45)}
   .chip.warn{color:var(--amber);border-color:rgba(255,194,75,.45)}
   .chip.clash{color:var(--alert);border-color:rgba(255,180,84,.45)}
@@ -751,10 +754,23 @@ function render(items){
     return `<div class="card" data-id="${enc(t.id)}">
       <div class="rank">${String(i+1).padStart(2,"0")}</div>
       <div class="cbody"><div class="ct">${esc(t.artist)} — ${esc(t.title)}</div><div class="cr">${reasons||"&nbsp;"}</div></div>
-      <div class="chips"><span class="chip">${t.camelot||"?"}</span><span class="chip bpm">${t.bpm?Math.round(t.bpm):"—"}</span>${gen?`<span class="chip gen">${esc(gen)}</span>`:""}</div>
+      <div class="chips"><span class="chip">${t.camelot||"?"}</span><span class="chip bpm">${t.bpm?Math.round(t.bpm):"—"}</span>${gen?`<span class="chip gen">${esc(gen)}</span>`:""}<span class="chip tidal">··</span></div>
     </div>`;
   }).join("");
   L.querySelectorAll(".card[data-id]").forEach(c=>c.onclick=()=>enqueue(suggMap[dec(c.dataset.id)]));
+  tidalFlags(L, items);
+}
+
+/* lazily flag which suggestions are playable on TIDAL */
+function tidalFlags(L, items){
+  const cards = L.querySelectorAll(".card");
+  items.forEach((t,i)=>{
+    const el = cards[i] && cards[i].querySelector(".chip.tidal"); if(!el) return;
+    api("/api/tidal?artist="+enc(t.artist)+"&title="+enc(t.title)).then(r=>{
+      el.textContent = r.available ? "✓ TIDAL" : "no TIDAL";
+      el.classList.add(r.available ? "ok" : "off");
+    }).catch(()=>{ el.remove(); });
+  });
 }
 
 const esc = s => (s||"").replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));

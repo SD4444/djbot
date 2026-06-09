@@ -58,13 +58,24 @@ def _token() -> Optional[str]:
     return _tok["token"]
 
 
-def find(artist: str, title: str, country: str = "US") -> Optional[dict]:
-    """Best TIDAL match for a track, or None if not found / no creds.
+_find_cache: dict = {}
 
-    Returns ``{"tidal_id", "title"}``. Relies on TIDAL search relevance for the
-    "artist title" query (top track), refining the title from the included
-    resources when present.
+
+def find(artist: str, title: str, country: str = "US") -> Optional[dict]:
+    """Best TIDAL match for a track, or None if not found / no creds / no match.
+
+    Cached in-process (token is valid ~4h and the catalog is stable). Returns
+    ``{"tidal_id", "title"}``.
     """
+    key = f"{artist}|{title}".lower().strip()
+    if key in _find_cache:
+        return _find_cache[key]
+    result = _lookup(artist, title, country)
+    _find_cache[key] = result
+    return result
+
+
+def _lookup(artist: str, title: str, country: str) -> Optional[dict]:
     tok = _token()
     if not tok:
         return None
@@ -89,6 +100,9 @@ def find(artist: str, title: str, country: str = "US") -> Optional[dict]:
         (i.get("attributes", {}).get("title")
          for i in d.get("included", [])
          if i.get("type") == "tracks" and i.get("id") == top_id),
-        title,
+        None,
     )
-    return {"tidal_id": top_id, "title": inc_title}
+    # guard against TIDAL returning a loosely-related track for a track it lacks
+    if inc_title and _ratio(inc_title, title) < 0.45:
+        return None
+    return {"tidal_id": top_id, "title": inc_title or title}

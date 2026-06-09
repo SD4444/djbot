@@ -7,3 +7,6 @@ data/
 
 # abandoned image-composite experiments (UI is pure-code now)
 djbot/web/assets/
+
+# synthwave outrun console = local side project (per Simon)
+djbot/web/console.html
