@@ -37,6 +37,11 @@ class Weights:
     # played or mixed (Track.curators). Modest, so harmony/BPM still decide the
     # mix; this only nudges between otherwise-comparable picks.
     curation: float = 0.10
+    # Sonic-similarity prior: reward candidates in the seed track's cosine.club
+    # audio-embedding neighbourhood (passed in as sonic_scores). Only fires when
+    # a pool track is among the seed's sonic neighbours; nudges "harmonically
+    # fine AND sounds alike" picks upward.
+    sonic: float = 0.20
     bpm_tolerance: float = 0.06   # fraction; ~6% is a comfortable beatmatch
     # Penalty applied to half/double-time matches (still useful, but a bigger
     # move than a straight tempo match).
@@ -142,6 +147,7 @@ def score_transition(
     cand: Track,
     weights: Weights = Weights(),
     direction: str = "any",
+    sonic_scores: Optional[dict] = None,
 ) -> Suggestion:
     reasons: List[str] = []
 
@@ -164,11 +170,16 @@ def score_transition(
     if cnote:
         reasons.append(cnote)
 
+    sn = (sonic_scores or {}).get(cand.id, 0.0)
+    if sn > 0:
+        reasons.append(f"~ sounds alike {round(sn * 100)}%")
+
     total = (
         weights.harmonic * h
         + weights.bpm * b
         + weights.energy * e
         + weights.curation * c
+        + weights.sonic * sn
     )
     return Suggestion(track=cand, score=round(total, 4), reasons=reasons)
 
@@ -181,13 +192,14 @@ def recommend_next(
     direction: str = "any",
     limit: int = 10,
     min_score: float = 0.0,
+    sonic_scores: Optional[dict] = None,
 ) -> List[Suggestion]:
     """Rank tracks in `pool` as candidates to follow `current`."""
     out: List[Suggestion] = []
     for cand in pool:
         if cand.id == current.id:
             continue
-        s = score_transition(current, cand, weights, direction)
+        s = score_transition(current, cand, weights, direction, sonic_scores)
         if s.score >= min_score:
             out.append(s)
     out.sort(key=lambda s: s.score, reverse=True)
@@ -202,6 +214,7 @@ def build_runway(
     weights: Weights = Weights(),
     direction: str = "any",
     beam_width: int = 4,
+    sonic_scores: Optional[dict] = None,
 ) -> List[Suggestion]:
     """Plan a sequence of `depth` tracks after `start` that flows end to end.
 
@@ -219,7 +232,7 @@ def build_runway(
             candidates = [t for t in pool if t.id not in used]
             steps = recommend_next(
                 last, candidates, weights=weights,
-                direction=direction, limit=beam_width,
+                direction=direction, limit=beam_width, sonic_scores=sonic_scores,
             )
             for s in steps:
                 nxt.append((
@@ -275,6 +288,7 @@ def score_steered(
     cand: Track,
     intensity: float,
     weights: Weights = Weights(),
+    sonic_scores: Optional[dict] = None,
 ) -> Suggestion:
     """Score a transition for the fader: stay mixable, but move in `intensity`.
 
@@ -306,11 +320,16 @@ def score_steered(
     if cnote:
         reasons.append(cnote)
 
+    sn = (sonic_scores or {}).get(cand.id, 0.0)
+    if sn > 0:
+        reasons.append(f"~ sounds alike {round(sn * 100)}%")
+
     total = (
         weights.harmonic * h
         + weights.bpm * b
         + weights.steer * p
         + weights.curation * c
+        + weights.sonic * sn
     )
     return Suggestion(track=cand, score=round(total, 4), reasons=reasons)
 
@@ -323,6 +342,7 @@ def steer(
     depth: int = 4,
     weights: Weights = Weights(),
     beam_width: int = 4,
+    sonic_scores: Optional[dict] = None,
 ) -> List[Suggestion]:
     """Plan a smooth `depth`-track path that steers the set per the fader.
 
@@ -339,7 +359,7 @@ def steer(
         nxt: List[tuple[float, List[Suggestion], set, Track]] = []
         for cum, path, used, last in beams:
             scored = [
-                score_steered(last, t, intensity, weights)
+                score_steered(last, t, intensity, weights, sonic_scores)
                 for t in pool if t.id not in used
             ]
             scored.sort(key=lambda s: s.score, reverse=True)

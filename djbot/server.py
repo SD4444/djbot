@@ -172,6 +172,24 @@ class _Handler(BaseHTTPRequestHandler):
         sid = (qs.get("id") or [""])[0]
         return self.panel.find(sid) if sid else None
 
+    def _sonic_scores(self, seed: Track) -> dict:
+        """{catalog_id: cosine_similarity} for the seed's sonic neighbours.
+
+        Lets the recommender reward pool tracks that also *sound* like the seed
+        (cosine.club). Best-effort + cached (cosine caches on disk), so a cosine
+        outage just drops the sonic term rather than breaking suggestions.
+        """
+        try:
+            cands = cosine.similar_for(seed.artist, seed.title, limit=60)
+        except Exception:
+            return {}
+        out: dict = {}
+        for c in cands:
+            sc = c.get("score")
+            if isinstance(sc, (int, float)):
+                out[make_id(c["artist"], c["title"])] = round(float(sc), 4)
+        return out
+
     def _enrich(self, artist: str, title: str) -> dict:
         """Read a discovery's DNA (TIDAL availability + Discogs genre + librosa
         BPM/key), upsert it into the catalog, and refresh the in-memory pool."""
@@ -309,21 +327,24 @@ class _Handler(BaseHTTPRequestHandler):
         if path == "/api/next":
             direction = (qs.get("dir") or ["any"])[0]
             sug = rec.recommend_next(
-                seed, self.panel.mixable, direction=direction, limit=10
+                seed, self.panel.mixable, direction=direction, limit=10,
+                sonic_scores=self._sonic_scores(seed),
             )
             return self._send({"now": _track_json(seed),
                                "suggestions": [_sugg_json(s) for s in sug]})
 
         if path == "/api/runway":
             depth = int((qs.get("depth") or ["3"])[0])
-            path_ = rec.build_runway(seed, self.panel.mixable, depth=depth)
+            path_ = rec.build_runway(seed, self.panel.mixable, depth=depth,
+                                     sonic_scores=self._sonic_scores(seed))
             return self._send({"now": _track_json(seed),
                                "path": [_sugg_json(s) for s in path_]})
 
         if path == "/api/steer":
             intensity = float((qs.get("intensity") or ["0"])[0])
             depth = int((qs.get("depth") or ["5"])[0])
-            path_ = rec.steer(seed, self.panel.mixable, intensity, depth=depth)
+            path_ = rec.steer(seed, self.panel.mixable, intensity, depth=depth,
+                              sonic_scores=self._sonic_scores(seed))
             return self._send({"now": _track_json(seed),
                                "intensity": intensity,
                                "path": [_sugg_json(s) for s in path_]})
