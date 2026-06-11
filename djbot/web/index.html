@@ -238,7 +238,7 @@
   /* ---------- suggestions ---------- */
   .sugg{flex:1;min-height:0;display:flex;flex-direction:column}
   .list{flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column;gap:11px;padding-right:4px}
-  .card{display:flex;align-items:center;gap:13px;padding:15px 16px;cursor:pointer;transition:.14s;min-height:34px;
+  .card{flex:none;display:flex;align-items:center;gap:13px;padding:15px 16px;cursor:pointer;transition:.14s;
     border:1px solid var(--line);border-radius:11px;background:linear-gradient(90deg,rgba(13,19,42,.5),rgba(8,12,28,.4));position:relative;overflow:hidden}
   .card::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--cyan);box-shadow:var(--tc);opacity:.8}
   .card:hover{transform:translateX(4px);border-color:rgba(47,244,255,.45);box-shadow:0 6px 22px rgba(0,0,0,.4),0 0 16px rgba(47,244,255,.12)}
@@ -259,7 +259,8 @@
   .chip.nokey{color:var(--amber);border-color:rgba(255,194,75,.5);background:rgba(255,194,75,.08)}
   /* similarity % as the lead on cosine (Vibe) cards */
   .rank.sim{color:var(--violet);text-shadow:var(--tv);display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1;min-width:48px}
-  .rank.sim .pu{font-size:11px;opacity:.85}
+  .rank.sim .pv{white-space:nowrap}
+  .rank.sim .pu{font-size:.62em;opacity:.85;margin-left:1px}
   .rank .rlab{font-family:"Share Tech Mono",monospace;font-weight:400;font-size:8px;letter-spacing:.14em;color:var(--dim);text-shadow:none;margin-top:3px}
   /* amber flag on a now-playing track with no BPM/key read */
   .nowflag{display:inline-block;margin-left:8px;font-family:"Share Tech Mono",monospace;font-size:10px;letter-spacing:.08em;
@@ -775,7 +776,7 @@ function renderVibe(data, source, runway){
   L.innerHTML = items.map((t,i)=>{
     const pct=Math.round((t.score||0)*100);
     const sim = !runway;  // SIMILAR mode → the lead IS the cosine match %
-    const lead = sim ? `${pct}<span class="pu">%</span><span class="rlab">MATCH</span>`
+    const lead = sim ? `<span class="pv">${pct}<span class="pu">%</span></span><span class="rlab">MATCH</span>`
                      : String(i+1).padStart(2,"0");
     let sub, chips;
     if(source==="vibemix" && t.in_pool){
