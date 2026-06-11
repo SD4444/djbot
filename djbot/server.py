@@ -458,6 +458,11 @@ class _Handler(BaseHTTPRequestHandler):
                 "bpm": (qs.get("bpm") or [None])[0],
                 "genre": (qs.get("genre") or [None])[0]}))
 
+        if path == "/api/spotify/config":
+            # client_id is public (PKCE flow); the page uses it to OAuth + drive
+            # the Web Playback SDK. No secret server-side.
+            return self._send({"client_id": config.get_key("spotify_client_id") or ""})
+
         if path == "/api/preview":
             # free 30s preview clip (iTunes/Deezer) to audition a track in-app
             a = (qs.get("artist") or [""])[0]

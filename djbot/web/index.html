@@ -360,6 +360,7 @@
       <div class="tcell m"><span class="tk">GAL VECTOR</span><span class="tv" id="tCoord">—</span></div>
       <div class="tcell l"><span class="tk">CATALOG</span><span class="tv" id="stat">—</span></div>
       <div class="tcell logbtn" id="tidalToggle"><span class="tk">TIDAL</span><span class="tv" id="tidalToggleV">ALL</span></div>
+      <div class="tcell logbtn" id="spfyBtn"><span class="tk">AUDIO</span><span class="tv" id="spfyV">♫ connect</span></div>
       <div class="tcell logbtn" id="logsBtn"><span class="tk">TRAVEL</span><span class="tv">⟐ LOGS</span></div>
       <div class="leds"><span class="led c"></span><span class="led m"></span><span class="led v"></span></div>
     </div>
@@ -677,28 +678,120 @@ function showNow(t){
   np.classList.remove("playing","dead"); np.textContent=np.dataset.lbl; np.title="play a free 30s preview";
 }
 
-/* ---------- in-app 30s preview player ---------- */
+/* ---------- in-app player: full track via Spotify, else 30s preview ---------- */
 const player = $("#player");
 let playKey = null, playBtn = null;
 player.addEventListener("ended", stopPreview);
 function stopPreview(){
+  try{ if(SPFY.player) SPFY.player.pause(); }catch(e){}
+  player.pause();
   if(playBtn){ playBtn.classList.remove("playing"); playBtn.textContent = playBtn.dataset.lbl||"▶"; }
   playKey = null; playBtn = null;
 }
 async function playPreview(artist, title, btn){
   const key = (artist+" — "+title).toLowerCase();
-  if(playKey===key){ player.pause(); stopPreview(); return; }   // toggle the same track off
-  if(playBtn) { player.pause(); stopPreview(); }                // switch from another
-  const lbl = btn.dataset.lbl || "▶";
+  if(playKey===key){ stopPreview(); return; }          // toggle the same track off
+  if(playBtn) stopPreview();                            // switch from another
+  const lbl = btn.dataset.lbl || "▶", full = lbl.includes("PREVIEW");
   btn.textContent = "…";
+  // 1) full track via Spotify when connected (Premium)
+  if(SPFY.ready && await spfyPlay(artist, title)){
+    playKey=key; playBtn=btn; btn.classList.add("playing");
+    btn.textContent = full ? "⏸ STOP" : "⏸"; return;
+  }
+  // 2) fall back to a free 30s preview clip
   let url=null;
   try{ const d=await api("/api/preview?artist="+encodeURIComponent(artist)+"&title="+encodeURIComponent(title)); url=d&&d.url; }catch(e){}
-  if(!url){ btn.classList.add("dead"); btn.textContent = lbl.includes("PREVIEW")?"✕ NO PREVIEW":"✕"; btn.title="no free preview found"; return; }
+  if(!url){ btn.classList.add("dead"); btn.textContent = full?"✕ NO AUDIO":"✕"; btn.title="no playable source found"; return; }
   player.src=url; try{ await player.play(); }catch(e){ stopPreview(); return; }
-  playKey=key; playBtn=btn;
-  btn.classList.add("playing"); btn.textContent = lbl.includes("PREVIEW")?"⏸ STOP":"⏸";
+  playKey=key; playBtn=btn; btn.classList.add("playing");
+  btn.textContent = full ? "⏸ STOP (30s)" : "⏸";
 }
 $("#nowPlay").onclick = ()=>{ if(state.now) playPreview(state.now.artist, state.now.title, $("#nowPlay")); };
+
+/* ---------- Spotify full-track playback (Web Playback SDK + PKCE) ---------- */
+const SPFY = { clientId:null, token:null, exp:0, refresh:null, player:null, deviceId:null, ready:false };
+const SP_SCOPES = "streaming user-read-email user-read-private user-modify-playback-state";
+const SP_REDIRECT = location.origin + "/";
+const _b64u = b => btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+const _rand = n => { const a=new Uint8Array(n); crypto.getRandomValues(a); return Array.from(a,x=>("0"+(x&255).toString(16)).slice(-2)).join(""); };
+const _sha = async s => crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
+
+async function spfyInit(){
+  try{ const c=await api("/api/spotify/config"); SPFY.clientId=c.client_id||null; }catch(e){}
+  SPFY.token=localStorage.getItem("sp_token"); SPFY.exp=+(localStorage.getItem("sp_exp")||0);
+  SPFY.refresh=localStorage.getItem("sp_refresh");
+  const code=new URLSearchParams(location.search).get("code");
+  if(code){ await spfyExchange(code); history.replaceState({},"",location.pathname); }
+  if(SPFY.clientId && (SPFY.token||SPFY.refresh)) spfyLoadSDK();
+  spfyUpdateUI();
+}
+async function spfyConnect(){
+  if(!SPFY.clientId){ alert("Add your Spotify Client ID first:\n  djbot config set spotify_client_id <id>\nthen restart the server."); return; }
+  const v=_rand(48); localStorage.setItem("sp_verifier", v);
+  const challenge=_b64u(await _sha(v));
+  const p=new URLSearchParams({client_id:SPFY.clientId, response_type:"code", redirect_uri:SP_REDIRECT,
+    scope:SP_SCOPES, code_challenge_method:"S256", code_challenge:challenge});
+  location.href="https://accounts.spotify.com/authorize?"+p;
+}
+function spfyStore(d){
+  SPFY.token=d.access_token; SPFY.exp=Date.now()+((d.expires_in||3600)*1000)-60000;
+  localStorage.setItem("sp_token",SPFY.token); localStorage.setItem("sp_exp",SPFY.exp);
+  if(d.refresh_token){ SPFY.refresh=d.refresh_token; localStorage.setItem("sp_refresh",d.refresh_token); }
+}
+async function spfyExchange(code){
+  const body=new URLSearchParams({client_id:SPFY.clientId, grant_type:"authorization_code", code,
+    redirect_uri:SP_REDIRECT, code_verifier:localStorage.getItem("sp_verifier")||""});
+  try{ const r=await fetch("https://accounts.spotify.com/api/token",{method:"POST",
+    headers:{"Content-Type":"application/x-www-form-urlencoded"},body}); const d=await r.json();
+    if(d.access_token) spfyStore(d); }catch(e){}
+}
+async function spfyToken(){
+  if(SPFY.token && Date.now()<SPFY.exp) return SPFY.token;
+  if(SPFY.refresh){ try{ const body=new URLSearchParams({client_id:SPFY.clientId,
+      grant_type:"refresh_token", refresh_token:SPFY.refresh});
+    const r=await fetch("https://accounts.spotify.com/api/token",{method:"POST",
+      headers:{"Content-Type":"application/x-www-form-urlencoded"},body}); const d=await r.json();
+    if(d.access_token){ spfyStore(d); return SPFY.token; } }catch(e){} }
+  return null;
+}
+function spfyLoadSDK(){
+  if(window.Spotify) return spfyInitPlayer();
+  if(document.getElementById("spsdk")) return;
+  window.onSpotifyWebPlaybackSDKReady = spfyInitPlayer;
+  const s=document.createElement("script"); s.id="spsdk"; s.src="https://sdk.scdn.co/spotify-player.js";
+  document.head.appendChild(s);
+}
+async function spfyInitPlayer(){
+  if(!await spfyToken()) return;
+  SPFY.player=new Spotify.Player({name:"djbot Flight Deck", volume:0.85,
+    getOAuthToken:cb=>{ spfyToken().then(t=>t&&cb(t)); }});
+  SPFY.player.addListener("ready", ({device_id})=>{ SPFY.deviceId=device_id; SPFY.ready=true; spfyUpdateUI(); });
+  SPFY.player.addListener("not_ready", ()=>{ SPFY.ready=false; spfyUpdateUI(); });
+  SPFY.player.addListener("authentication_error", ()=>{ SPFY.token=null; localStorage.removeItem("sp_token"); spfyUpdateUI(); });
+  SPFY.player.addListener("account_error", ()=>{ alert("Spotify Premium is required for in-app playback."); });
+  SPFY.player.connect();
+}
+async function spfyPlay(artist, title){
+  const tok=await spfyToken(); if(!tok || !SPFY.deviceId) return false;
+  let uri=null;
+  try{ const r=await fetch("https://api.spotify.com/v1/search?type=track&limit=1&q="+
+      encodeURIComponent(artist+" "+title), {headers:{Authorization:"Bearer "+tok}});
+    const d=await r.json(); uri=d.tracks&&d.tracks.items&&d.tracks.items[0]&&d.tracks.items[0].uri; }catch(e){}
+  if(!uri) return false;
+  try{ await fetch("https://api.spotify.com/v1/me/player/play?device_id="+SPFY.deviceId,{method:"PUT",
+      headers:{Authorization:"Bearer "+tok,"Content-Type":"application/json"}, body:JSON.stringify({uris:[uri]})});
+    return true; }catch(e){ return false; }
+}
+function spfyUpdateUI(){
+  const v=$("#spfyV"), b=$("#spfyBtn"); if(!v) return;
+  if(!SPFY.clientId){ v.textContent="♫ add key"; b.classList.remove("on"); b.title="Set spotify_client_id (see setup)"; return; }
+  if(SPFY.ready){ v.textContent="♫ ✓ FULL"; b.classList.add("on"); b.title="Connected — ▶ plays full tracks via Spotify"; }
+  else if(SPFY.token||SPFY.refresh){ v.textContent="♫ linking…"; b.classList.remove("on"); }
+  else { v.textContent="♫ connect"; b.classList.remove("on"); b.title="Connect Spotify Premium for full-track playback"; }
+}
+$("#spfyBtn").onclick = spfyConnect;
+spfyInit();
 
 /* ---------- suggestion source (My Engine / Vibe / Vibe+Mix) ---------- */
 document.querySelectorAll(".src").forEach(s=>s.onclick=()=>{

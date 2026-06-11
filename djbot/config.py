@@ -23,6 +23,7 @@ _ENV = {
     "cosine_key": "COSINE_API_KEY",
     "tidal_client_id": "TIDAL_CLIENT_ID",
     "tidal_client_secret": "TIDAL_CLIENT_SECRET",
+    "spotify_client_id": "SPOTIFY_CLIENT_ID",
 }
 
 
