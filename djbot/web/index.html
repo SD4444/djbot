@@ -823,12 +823,17 @@ async function enrichAdd(cardEl, t){
   }catch(e){ cardEl.style.opacity="1"; cardEl.style.pointerEvents=""; if(sub) sub.textContent="⚠ enrich failed — try again"; }
 }
 
+let runSeq = 0;  // drops stale async responses when modes/tabs change fast
 async function run(){
   const head = headTrack(); if(!head) return;
+  const seq = ++runSeq;
+  const stale = () => seq !== runSeq;   // a newer run() started → abandon this one
   if(state.source !== "engine"){
     const depth = state.vibeMode==="runway" ? 3 : 1;
     $("#list").innerHTML = `<div class="empty">${depth>1?"charting a sonic journey…":"scanning the 1.9M universe…"}</div>`;
-    renderVibe(await api("/api/vibe?id="+enc(head.id)+"&limit=18&depth="+depth), state.source, depth>1);
+    const data = await api("/api/vibe?id="+enc(head.id)+"&limit=18&depth="+depth);
+    if(stale()) return;
+    renderVibe(data, state.source, depth>1);
     return;
   }
   const seed = enc(head.id);
@@ -841,8 +846,9 @@ async function run(){
     if(state.universe) L.innerHTML = `<div class="empty">steering through the 1.9M sonic universe…</div>`;
     data = await api("/api/steer?id="+seed+"&intensity="+state.intensity+uni);
     items = data.path; label = state.universe ? "STEER · SOUND" : "STEER";
-    showHarvest(data);
   }
+  if(stale()) return;
+  if(state.mode==="steer") showHarvest(data);
   $("#suggId").textContent = label;
   $("#suggAfter").innerHTML = `▸ extends from <b>${esc(head.artist)} — ${esc(head.title)}</b>` + (state.queue.length?" (queue tail)":" (now playing)");
   if(state.mode==="steer") showTrajectory(data.now, items);
