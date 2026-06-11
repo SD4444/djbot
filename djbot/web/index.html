@@ -766,7 +766,12 @@ async function spfyInitPlayer(){
   if(!await spfyToken()) return;
   SPFY.player=new Spotify.Player({name:"djbot Flight Deck", volume:0.85,
     getOAuthToken:cb=>{ spfyToken().then(t=>t&&cb(t)); }});
-  SPFY.player.addListener("ready", ({device_id})=>{ SPFY.deviceId=device_id; SPFY.ready=true; spfyUpdateUI(); });
+  SPFY.player.addListener("ready", ({device_id})=>{ SPFY.deviceId=device_id; SPFY.ready=true; spfyUpdateUI();
+    // make THIS in-browser player the active device so audio streams in-tab
+    // (not on a desktop Spotify app that might be open)
+    spfyToken().then(t=> t && fetch("https://api.spotify.com/v1/me/player",{method:"PUT",
+      headers:{Authorization:"Bearer "+t,"Content-Type":"application/json"},
+      body:JSON.stringify({device_ids:[device_id], play:false})}).catch(()=>{})); });
   SPFY.player.addListener("not_ready", ()=>{ SPFY.ready=false; spfyUpdateUI(); });
   SPFY.player.addListener("authentication_error", ()=>{ SPFY.token=null; localStorage.removeItem("sp_token"); spfyUpdateUI(); });
   SPFY.player.addListener("account_error", ()=>{ alert("Spotify Premium is required for in-app playback."); });
