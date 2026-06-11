@@ -237,15 +237,15 @@
 
   /* ---------- suggestions ---------- */
   .sugg{flex:1;min-height:0;display:flex;flex-direction:column}
-  .list{flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column;gap:9px;padding-right:4px}
-  .card{display:flex;align-items:center;gap:13px;padding:12px 14px;cursor:pointer;transition:.14s;
+  .list{flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column;gap:11px;padding-right:4px}
+  .card{display:flex;align-items:center;gap:13px;padding:15px 16px;cursor:pointer;transition:.14s;min-height:34px;
     border:1px solid var(--line);border-radius:11px;background:linear-gradient(90deg,rgba(13,19,42,.5),rgba(8,12,28,.4));position:relative;overflow:hidden}
   .card::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--cyan);box-shadow:var(--tc);opacity:.8}
   .card:hover{transform:translateX(4px);border-color:rgba(47,244,255,.45);box-shadow:0 6px 22px rgba(0,0,0,.4),0 0 16px rgba(47,244,255,.12)}
   .card .rank{font-family:Orbitron,sans-serif;font-weight:900;font-size:17px;color:var(--magenta);text-shadow:var(--tm);min-width:24px;text-align:center}
   .card .cbody{flex:1;min-width:0}
-  .card .ct{color:#fff;font-weight:600;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .card .cr{color:var(--dim);font-family:"Share Tech Mono",monospace;font-size:11px;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .card .ct{color:#fff;font-weight:600;font-size:15.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .card .cr{color:var(--dim);font-family:"Share Tech Mono",monospace;font-size:11.5px;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .card .cr .cur{color:var(--violet)}
   .chips{display:flex;gap:6px;flex:none}
   .chip{font-family:"Share Tech Mono",monospace;font-size:11px;padding:4px 9px;border-radius:7px;border:1px solid rgba(47,244,255,.3);color:var(--cyan);letter-spacing:.04em}
@@ -256,6 +256,14 @@
   .chip.tidal.off{color:var(--dim);opacity:.5;border-style:dashed}
   .chip.ok{color:var(--lime);border-color:rgba(124,255,196,.45)}
   .chip.warn{color:var(--amber);border-color:rgba(255,194,75,.45)}
+  .chip.nokey{color:var(--amber);border-color:rgba(255,194,75,.5);background:rgba(255,194,75,.08)}
+  /* similarity % as the lead on cosine (Vibe) cards */
+  .rank.sim{color:var(--violet);text-shadow:var(--tv);display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1;min-width:48px}
+  .rank.sim .pu{font-size:11px;opacity:.85}
+  .rank .rlab{font-family:"Share Tech Mono",monospace;font-weight:400;font-size:8px;letter-spacing:.14em;color:var(--dim);text-shadow:none;margin-top:3px}
+  /* amber flag on a now-playing track with no BPM/key read */
+  .nowflag{display:inline-block;margin-left:8px;font-family:"Share Tech Mono",monospace;font-size:10px;letter-spacing:.08em;
+    color:var(--amber);border:1px solid rgba(255,194,75,.5);border-radius:6px;padding:1px 7px;vertical-align:middle}
   .chip.clash{color:var(--alert);border-color:rgba(255,180,84,.45)}
   .chip.new{color:var(--dim);border-color:var(--line)}
   .chip.vibe{color:var(--violet);border-color:rgba(154,107,255,.45)}
@@ -633,7 +641,10 @@ function renderQueue(){
 
 function showNow(t){
   $("#nowTitle").textContent = t.title;
-  $("#nowArtist").innerHTML = esc(t.artist) + (t.curators?.length? `  ·  <span class="cur">played by ${esc(t.curators.join(", "))}</span>` : "");
+  const noDNA = !t.camelot || !t.bpm;
+  $("#nowArtist").innerHTML = esc(t.artist)
+    + (t.curators?.length? `  ·  <span class="cur">played by ${esc(t.curators.join(", "))}</span>` : "")
+    + (noDNA ? `<span class="nowflag" title="no preview found — BPM/key couldn't be read">⚠ NO KEY / BPM</span>` : "");
   const cam = t.camelot;
   $("#gKey").textContent = cam||"—";
   $("#gKeyName").textContent = (CAMELOT[cam]?.[0]) || "CAMELOT";
@@ -738,6 +749,13 @@ function harmVerdict(now, t){
 }
 const _hrank = t => t._h ? ({ok:3,warn:2,clash:1}[t._h.cls]||0) : -1;
 
+/* key + BPM chips, or an amber flag when the track has no read DNA */
+function keyBpmChips(t){
+  if(!t.camelot || !t.bpm)
+    return `<span class="chip nokey" title="no preview found — BPM/key unread, limited mixing">⚠ NO KEY/BPM</span>`;
+  return `<span class="chip">${t.camelot}</span><span class="chip bpm">${Math.round(t.bpm)}</span>`;
+}
+
 function renderVibe(data, source, runway){
   const L=$("#list"), head=headTrack();
   $("#suggId").textContent = (source==="vibe" ? "VIBE" : "VIBE+MIX") + (runway ? " · NEXT 3" : "");
@@ -756,23 +774,24 @@ function renderVibe(data, source, runway){
   if(!items.length){ L.innerHTML=`<div class="empty">no vibe matches found.</div>`; return; }
   L.innerHTML = items.map((t,i)=>{
     const pct=Math.round((t.score||0)*100);
-    const lead = runway ? String(i+1).padStart(2,"0") : String(pct);
+    const sim = !runway;  // SIMILAR mode → the lead IS the cosine match %
+    const lead = sim ? `${pct}<span class="pu">%</span><span class="rlab">MATCH</span>`
+                     : String(i+1).padStart(2,"0");
     let sub, chips;
     if(source==="vibemix" && t.in_pool){
       const h=t._h; sub = h ? h.label : "in your pool";
-      chips = (h?`<span class="chip ${h.cls}">${h.tag}</span>`:"") +
-              `<span class="chip">${t.camelot||"?"}</span><span class="chip bpm">${t.bpm?Math.round(t.bpm):"—"}</span>`;
+      chips = (h?`<span class="chip ${h.cls}">${h.tag}</span>`:"") + keyBpmChips(t);
     } else if(t.in_pool){
       sub = "in your pool — tap to queue";
-      chips = `<span class="chip">${t.camelot||"?"}</span><span class="chip bpm">${t.bpm?Math.round(t.bpm):"—"}</span>`;
+      chips = keyBpmChips(t);
     } else {
       sub = source==="vibemix" ? "tap to analyse → reveals harmonic fit + queues"
                                : "tap to analyse + add to set";
       chips = `<span class="chip new" data-listen title="listen on source">▶ listen</span>`;
     }
-    if(runway) chips = `<span class="chip vibe">◈${pct}</span>` + chips;
+    if(runway) chips = `<span class="chip vibe">◈${pct}%</span>` + chips;
     return `<div class="card disc" data-k="${t._k}">
-      <div class="rank">${lead}</div>
+      <div class="rank${sim?' sim':''}">${lead}</div>
       <div class="cbody"><div class="ct">${esc(t.artist)} — ${esc(t.title)}</div><div class="cr">${sub}</div></div>
       <div class="chips">${chips}<span class="chip tidal">··</span></div></div>`;
   }).join("");
@@ -839,7 +858,7 @@ function render(items){
     return `<div class="card" data-id="${enc(t.id)}">
       <div class="rank">${String(i+1).padStart(2,"0")}</div>
       <div class="cbody"><div class="ct">${esc(t.artist)} — ${esc(t.title)}</div><div class="cr">${reasons||"&nbsp;"}</div></div>
-      <div class="chips"><span class="chip">${t.camelot||"?"}</span><span class="chip bpm">${t.bpm?Math.round(t.bpm):"—"}</span>${gen?`<span class="chip gen">${esc(gen)}</span>`:""}<span class="chip tidal">··</span></div>
+      <div class="chips">${keyBpmChips(t)}${gen?`<span class="chip gen">${esc(gen)}</span>`:""}<span class="chip tidal">··</span></div>
     </div>`;
   }).join("");
   L.querySelectorAll(".card[data-id]").forEach(c=>c.onclick=()=>enqueue(suggMap[dec(c.dataset.id)]));
