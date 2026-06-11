@@ -320,7 +320,9 @@ def build_parser() -> argparse.ArgumentParser:
     csub = c.add_subparsers(dest="action", required=True)
     csub.add_parser("show", help="show configured keys").set_defaults(action="show")
     cset = csub.add_parser("set", help="set a key")
-    cset.add_argument("name", choices=["discogs_token", "getsongbpm_key", "cosine_key"])
+    cset.add_argument("name", choices=[
+        "discogs_token", "getsongbpm_key", "cosine_key",
+        "tidal_client_id", "tidal_client_secret", "spotify_client_id"])
     cset.add_argument("value")
     cset.set_defaults(action="set")
     c.set_defaults(func=cmd_config)
