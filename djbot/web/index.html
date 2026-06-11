@@ -681,8 +681,10 @@ document.querySelectorAll("#vibeTabs .tab").forEach(tab=>tab.onclick=()=>{
 });
 
 /* ---------- modes (within My Engine) ---------- */
-document.querySelectorAll(".tab").forEach(tab=>tab.onclick=()=>{
-  document.querySelectorAll(".tab").forEach(t=>t.classList.remove("on"));
+/* scope to #engineTabs: the vibe sub-tabs are also .tab, and a bare ".tab"
+   selector would overwrite their onclick (clobbering vibeMode → NEXT 3 broke). */
+document.querySelectorAll("#engineTabs .tab").forEach(tab=>tab.onclick=()=>{
+  document.querySelectorAll("#engineTabs .tab").forEach(t=>t.classList.remove("on"));
   tab.classList.add("on"); state.mode = tab.dataset.mode;
   $("#throttle").classList.toggle("on", state.mode==="steer");
   run();
