@@ -341,6 +341,9 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
+        # Local dev tool: never cache, so a refresh always gets the latest
+        # page/JS (otherwise UI edits appear not to take effect).
+        self.send_header("Cache-Control", "no-store, must-revalidate")
         self.end_headers()
         self.wfile.write(body)
 
