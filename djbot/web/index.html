@@ -126,6 +126,11 @@
   .results .row:last-child{border-bottom:0}
   .results .row:hover{background:rgba(47,244,255,.12)}
   .results .row .m{display:block;color:var(--dim);font-family:"Share Tech Mono",monospace;font-size:11px;margin-top:2px}
+  .results .rhead{padding:7px 13px;cursor:default;background:rgba(154,107,255,.08);border-top:1px solid rgba(154,107,255,.25)}
+  .results .rhead .m{color:var(--violet);margin:0;letter-spacing:.1em}
+  .results .rhead:hover{background:rgba(154,107,255,.08)}
+  .results .trow .m{color:var(--violet)}
+  .results .trow:hover{background:rgba(154,107,255,.14)}
 
   /* ---------- now playing ---------- */
   .now{display:flex;flex-direction:column;gap:13px}
@@ -446,7 +451,7 @@
 <script>
 const $ = s => document.querySelector(s);
 let state = { now:null, queue:[], mode:"next", intensity:0, source:"engine", vibeMode:"list", tidalOnly:false, universe:false };
-let searchMap = {}, suggMap = {}, vibeMap = {};
+let searchMap = {}, suggMap = {}, vibeMap = {}, tidalMap = {};
 const headTrack = () => state.queue.length ? state.queue[state.queue.length-1] : state.now;
 
 /* ---------- music → physics maps ---------- */
@@ -553,14 +558,46 @@ $("#q").addEventListener("input", e=>{
     const rows = await api("/api/search?q="+encodeURIComponent(q));
     searchMap = {}; rows.forEach(t=>searchMap[t.id]=t);
     const box = $("#results");
-    box.innerHTML = rows.length ? rows.map(t=>
+    box.innerHTML = rows.map(t=>
       `<div class="row" data-id="${enc(t.id)}">${esc(t.artist)} — ${esc(t.title)}
-        <span class="m">${t.camelot||"?"} · ${t.bpm?Math.round(t.bpm):"—"} BPM · ${(t.genre||"").replace(/_/g," ")}</span></div>`).join("")
-      : `<div class="row"><span class="m">no match</span></div>`;
+        <span class="m">${t.camelot||"?"} · ${t.bpm?Math.round(t.bpm):"—"} BPM · ${(t.genre||"").replace(/_/g," ")}</span></div>`).join("");
     box.classList.add("on");
     box.querySelectorAll(".row[data-id]").forEach(r=>r.onclick=()=>selectNow(searchMap[dec(r.dataset.id)]));
+    tidalSearch(q, rows);  // then append whole-catalog TIDAL matches
   }, 180);
 });
+
+/* search the whole TIDAL catalog; tapping a result reads it in + seeds it */
+async function tidalSearch(q, localRows){
+  let trows = [];
+  try{ trows = await api("/api/tsearch?q="+encodeURIComponent(q)); }catch(e){}
+  if(q !== $("#q").value.trim()) return;            // a newer keystroke won
+  const box = $("#results"), shown = new Set(localRows.map(t=>(t.artist+" — "+t.title).toLowerCase()));
+  trows = trows.filter(t=>!t.in_pool && !shown.has((t.artist+" — "+t.title).toLowerCase()));
+  if(!trows.length){
+    if(!box.querySelector(".row[data-id]")) box.innerHTML = `<div class="row"><span class="m">no match — try “artist title”</span></div>`;
+    return;
+  }
+  tidalMap = {};
+  const head = `<div class="row rhead"><span class="m">▸ FROM TIDAL · tap to add &amp; play</span></div>`;
+  const items = trows.map((t,i)=>{ tidalMap["T"+i]=t;
+    return `<div class="row trow" data-tk="T${i}">${esc(t.artist)} — ${esc(t.title)}
+      <span class="m">＋ add from TIDAL</span></div>`; }).join("");
+  box.insertAdjacentHTML("beforeend", head+items);
+  box.classList.add("on");
+  box.querySelectorAll(".trow[data-tk]").forEach(r=>r.onclick=()=>addFromTidal(tidalMap[r.dataset.tk], r));
+}
+
+async function addFromTidal(t, rowEl){
+  if(!t) return;
+  const m = rowEl && rowEl.querySelector(".m");
+  if(m){ rowEl.style.pointerEvents="none"; rowEl.style.opacity=".6"; m.textContent="reading BPM / key… (~10s)"; }
+  try{
+    const d = await api("/api/enrich?artist="+encodeURIComponent(t.artist)+"&title="+encodeURIComponent(t.title));
+    if(d && d.id){ selectNow(d); }                 // mixable or not, seed it
+    else if(m){ m.textContent="⚠ couldn't read — try another"; rowEl.style.opacity="1"; rowEl.style.pointerEvents=""; }
+  }catch(e){ if(m){ m.textContent="⚠ add failed — try again"; rowEl.style.opacity="1"; rowEl.style.pointerEvents=""; } }
+}
 document.addEventListener("click", e=>{ if(!e.target.closest(".search")) $("#results").classList.remove("on"); });
 
 /* set current track from search — starts a fresh set path */

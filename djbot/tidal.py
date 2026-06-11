@@ -59,6 +59,72 @@ def _token() -> Optional[str]:
 
 
 _find_cache: dict = {}
+_search_cache: dict = {}
+
+
+def search(query: str, limit: int = 8, country: str = "US") -> list[dict]:
+    """Ranked TIDAL catalog matches for free-text `query` (the seed search bar).
+
+    Returns up to `limit` ``{"tidal_id", "artist", "title"}`` dicts in TIDAL's
+    search-rank order, so the user can pick any track in the catalog as a seed
+    (not just ones already in the local pool). Cached in-process; ``[]`` on no
+    creds / no match / error.
+    """
+    key = f"{query.lower().strip()}|{limit}|{country}"
+    if key in _search_cache:
+        return _search_cache[key]
+    out = _search(query, limit, country)
+    _search_cache[key] = out
+    return out
+
+
+def _search(query: str, limit: int, country: str) -> list[dict]:
+    tok = _token()
+    if not tok:
+        return []
+    q = urllib.parse.quote(query)
+    # tracks.artists nests the artist resources so we can show "Artist — Title".
+    url = (f"{_API}/searchResults/{q}?countryCode={country}"
+           "&include=tracks,tracks.artists")
+    req = urllib.request.Request(url, headers={
+        "Authorization": "Bearer " + tok,
+        "Accept": "application/vnd.api+json",
+        "User-Agent": USER_AGENT,
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            d = json.load(r)
+    except (urllib.error.URLError, ValueError, OSError):
+        return []
+    inc = d.get("included", [])
+    tracks_by_id = {i.get("id"): i for i in inc if i.get("type") == "tracks"}
+    artist_name = {i.get("id"): i.get("attributes", {}).get("name")
+                   for i in inc if i.get("type") == "artists"}
+    order = (d.get("data", {}).get("relationships", {})
+             .get("tracks", {}).get("data", []))
+    out: list[dict] = []
+    seen: set = set()
+    for ref in order:
+        tr = tracks_by_id.get(ref.get("id"))
+        if not tr:
+            continue
+        attrs = tr.get("attributes", {})
+        title = attrs.get("title")
+        if not title:
+            continue
+        if attrs.get("version"):
+            title = f"{title} ({attrs['version']})"
+        names = [artist_name.get(a.get("id"))
+                 for a in tr.get("relationships", {}).get("artists", {}).get("data", [])]
+        artist = ", ".join(n for n in names if n) or "—"
+        dedup = (artist.lower(), title.lower())
+        if dedup in seen:
+            continue
+        seen.add(dedup)
+        out.append({"tidal_id": tr.get("id"), "artist": artist, "title": title})
+        if len(out) >= limit:
+            break
+    return out
 
 
 def find(artist: str, title: str, country: str = "US") -> Optional[dict]:

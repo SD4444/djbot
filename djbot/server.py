@@ -9,7 +9,9 @@ localhost so the laptop and a phone on the same wifi can both reach it.
 
 API (all GET, JSON out):
     /api/state                      -> catalog summary (counts, genres)
-    /api/search?q=…                 -> tracks matching a query (now-playing picker)
+    /api/search?q=…                 -> local-pool tracks matching a query (now-playing picker)
+    /api/tsearch?q=…                -> whole-TIDAL-catalog matches for a seed search; tap one
+                                       in the UI to enrich-on-select it into the pool
     /api/next?id=…&dir=any          -> ranked next tracks (mode 1)
     /api/runway?id=…&depth=3        -> a flowing N-track runway (mode 2)
     /api/steer?id=…&intensity=0.5   -> a steered path; intensity -1..1 (mode 3, the fader)
@@ -396,6 +398,23 @@ class _Handler(BaseHTTPRequestHandler):
 
         if path == "/api/search":
             return self._send(self.panel.search((qs.get("q") or [""])[0]))
+
+        if path == "/api/tsearch":
+            # whole-TIDAL-catalog seed search; flags rows already in the pool so
+            # the UI can skip dupes and route the rest through enrich-on-select.
+            q = (qs.get("q") or [""])[0].strip()
+            if not q:
+                return self._send([])
+            try:
+                rows = tidal.search(q, limit=8)
+            except Exception:
+                rows = []
+            for r in rows:
+                hit = self.panel._mixable_track(make_id(r["artist"], r["title"]))
+                r["in_pool"] = hit is not None
+                if hit is not None:
+                    r["id"] = hit.id
+            return self._send(rows)
 
         if path == "/api/enrich":
             return self._send(self._enrich((qs.get("artist") or [""])[0],

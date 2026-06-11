@@ -33,9 +33,13 @@ Read `~/Music/_Serato_/History/*.session`, fuzzy‑match the latest track to the
 the seed (AUTO ⟷ MANUAL toggle). Must be built **on Simon's machine** with Serato data — can't
 test remotely.
 
-### 4. TIDAL search bar (Bar B)
-Type a track → live TIDAL catalog search → pick → enrich‑on‑select. Lets the seed come from the
-whole TIDAL catalog, not just the local pool. (Official TIDAL API + `/api/enrich` already exist.)
+### 4. ✅ TIDAL search bar (Bar B) — SHIPPED
+The now‑playing search now spans the **whole TIDAL catalog**, not just the local pool.
+- `tidal.search()` → ranked `{tidal_id, artist, title}` list (JSON:API `include=tracks,
+  tracks.artists`); `/api/tsearch?q=` wraps it + flags rows already in the pool.
+- UI: under the local hits, a "▸ FROM TIDAL · tap to add & play" group; tapping a result
+  runs enrich‑on‑select (BPM/key/TIDAL ~10s) then seeds it. So you can type *any* track —
+  e.g. "tremble tokyo prose" — and go, even if it was never in your pool.
 
 ## ✅ Done — Phase 4 + cosine/TIDAL/UX (2026‑06‑09)
 - **Live cockpit web app** (`djbot/server.py` stdlib http.server + `djbot/web/index.html`):
