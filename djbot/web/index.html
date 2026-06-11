@@ -218,6 +218,17 @@
   .thr-traj .bpm{color:var(--magenta);text-shadow:var(--tm)}
   .thr-traj .g{color:var(--lime);text-shadow:var(--tl)}
   .thr-traj .arw{color:var(--dim);margin:0 5px}
+  .thr-uni{margin-top:12px;padding-top:10px;border-top:1px solid var(--line);text-align:center}
+  .uni-tog{display:inline-flex;align-items:center;gap:8px;cursor:pointer;font-family:"Share Tech Mono",monospace;font-size:11px;letter-spacing:.05em;color:var(--dim)}
+  .uni-tog input{width:auto;height:auto;accent-color:var(--violet);cursor:pointer}
+  .uni-tog b{color:var(--violet);text-shadow:var(--tv)}
+  .uni-status{margin-top:8px;min-height:15px;font-family:"Share Tech Mono",monospace;font-size:11px;color:var(--dim)}
+  .uni-status .uni-m{color:var(--violet)}
+  .uni-status .warn{color:var(--amber)}
+  .harvBtn{margin-left:8px;font-family:"Share Tech Mono",monospace;font-size:11px;padding:3px 10px;border-radius:7px;cursor:pointer;
+    background:rgba(154,107,255,.12);border:1px solid rgba(154,107,255,.45);color:var(--violet);letter-spacing:.04em}
+  .harvBtn:hover{background:rgba(154,107,255,.22)}
+  .harvBtn:disabled{opacity:.55;cursor:default}
 
   /* ---------- suggestions ---------- */
   .sugg{flex:1;min-height:0;display:flex;flex-direction:column}
@@ -401,6 +412,10 @@
           <input id="fader" type="range" min="-100" max="100" value="0" step="5" /></div>
         <div class="thr-read" id="faderRead">HOLD — staying in the pocket</div>
         <div class="thr-traj" id="faderTraj">pick a track, then steer to chart a course</div>
+        <div class="thr-uni">
+          <label class="uni-tog"><input type="checkbox" id="uniToggle"> ⊕ steer through <b>SOUND</b> · plan across the 1.9M universe</label>
+          <div class="uni-status" id="uniStatus"></div>
+        </div>
       </div>
 
       <div class="panel cy sugg">
@@ -430,7 +445,7 @@
 
 <script>
 const $ = s => document.querySelector(s);
-let state = { now:null, queue:[], mode:"next", intensity:0, source:"engine", vibeMode:"list", tidalOnly:false };
+let state = { now:null, queue:[], mode:"next", intensity:0, source:"engine", vibeMode:"list", tidalOnly:false, universe:false };
 let searchMap = {}, suggMap = {}, vibeMap = {};
 const headTrack = () => state.queue.length ? state.queue[state.queue.length-1] : state.now;
 
@@ -632,6 +647,30 @@ $("#fader").addEventListener("input", e=>{
   if(state.mode==="steer") run();
 });
 
+/* steer-through-SOUND: plan the path across the whole cosine universe */
+$("#uniToggle").addEventListener("change", e=>{
+  state.universe = e.target.checked;
+  if(!state.universe) $("#uniStatus").innerHTML = "";
+  if(state.mode==="steer") run();
+});
+
+/* render the universe status line + a "read more" (pre-enrich) action */
+function showHarvest(data){
+  const el=$("#uniStatus");
+  if(!state.universe){ el.innerHTML=""; return; }
+  if(data.error){ el.innerHTML=`<span class="warn">${esc(data.error)}</span>`; return; }
+  const m=data.meta||{}, pend=(data.pending||[]).length;
+  el.innerHTML = `<span class="uni-m">universe · ${m.universe_mixable||0} mixable · ${pend} awaiting a read</span>`
+    + (pend ? ` <button class="harvBtn" id="harvBtn">⊕ read ${Math.min(pend,6)} more</button>` : "");
+  const b=$("#harvBtn"); if(b) b.onclick=harvestMore;
+}
+async function harvestMore(){
+  const head=headTrack(); if(!head) return;
+  const b=$("#harvBtn"); if(b){ b.disabled=true; b.textContent="reading audio… (~30s)"; }
+  try{ await api("/api/harvest?id="+enc(head.id)+"&n=6"); }catch(e){}
+  run();  // re-plan; freshly enriched universe tracks are now candidates
+}
+
 /* show the BPM arc + genre trajectory the steer path charts */
 function showTrajectory(now, items){
   const el=$("#faderTraj"); if(!items||!items.length){ el.textContent="pick a track, then steer to chart a course"; return; }
@@ -740,7 +779,13 @@ async function run(){
   let data, items, label="QUEUE";
   if(state.mode==="next"){ data = await api("/api/next?id="+seed); items = data.suggestions; label="NEXT"; }
   else if(state.mode==="runway"){ data = await api("/api/runway?id="+seed+"&depth=3"); items = data.path; label="RUNWAY×3"; }
-  else { data = await api("/api/steer?id="+seed+"&intensity="+state.intensity); items = data.path; label="STEER"; }
+  else {
+    const uni = state.universe ? "&universe=1" : "";
+    if(state.universe) L.innerHTML = `<div class="empty">steering through the 1.9M sonic universe…</div>`;
+    data = await api("/api/steer?id="+seed+"&intensity="+state.intensity+uni);
+    items = data.path; label = state.universe ? "STEER · SOUND" : "STEER";
+    showHarvest(data);
+  }
   $("#suggId").textContent = label;
   $("#suggAfter").innerHTML = `▸ extends from <b>${esc(head.artist)} — ${esc(head.title)}</b>` + (state.queue.length?" (queue tail)":" (now playing)");
   if(state.mode==="steer") showTrajectory(data.now, items);

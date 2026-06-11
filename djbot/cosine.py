@@ -27,6 +27,7 @@ from typing import Optional
 
 from . import config
 from .catalog import DEFAULT_DB_PATH
+from .models import make_id
 
 BASE = "https://cosine.club/api/v1"
 USER_AGENT = "djbot/0.1 (personal DJ harmonic-mix tool)"
@@ -142,3 +143,56 @@ def similar_for(artist: str, title: str, limit: int = 20) -> list[dict]:
     """Resolve a track then return its sonically-similar candidates (or [])."""
     m = resolve(artist, title)
     return similar(m["cosine_id"], limit=limit) if m else []
+
+
+def neighbourhood(
+    artist: str,
+    title: str,
+    *,
+    hops: int = 2,
+    breadth: int = 18,
+    cap: int = 80,
+) -> list[dict]:
+    """Harvest a broad sonic neighbourhood of a track across the universe.
+
+    `similar_for` only returns the seed's immediate neighbours. To steer a path
+    across the whole ~1.9M cosine catalog we want a wider candidate set, so we
+    walk similar→similar for `hops` generations (a small breadth-first expansion),
+    deduping by canonical id and keeping the *best* (max) similarity score seen
+    for each track. The score is decayed per hop so closer neighbours rank above
+    distant cousins. Returns up to `cap` normalised items sorted by score desc.
+
+    Cached/rate-limited by the underlying `search`/`similar` calls, so repeated
+    harvests of the same seed are cheap.
+    """
+    m = resolve(artist, title)
+    if not m:
+        return []
+    seed_id = make_id(artist, title)
+    best: dict[str, dict] = {}
+    frontier = [(m["cosine_id"], 0)]  # cosine_ids still to expand, with their hop
+    visited = {seed_id}
+
+    while frontier:
+        cid, hop = frontier.pop(0)
+        if hop >= hops:
+            continue
+        decay = 0.85 ** hop  # distant hops count for a little less
+        for c in similar(cid, limit=breadth):
+            cid2 = c.get("cosine_id")
+            if not cid2:
+                continue
+            key = make_id(c["artist"], c["title"])
+            if key == seed_id:
+                continue
+            raw = c.get("score")
+            score = (float(raw) * decay) if isinstance(raw, (int, float)) else 0.0
+            prev = best.get(key)
+            if prev is None or score > prev["score"]:
+                best[key] = {**c, "score": round(score, 4), "hop": hop + 1}
+            if key not in visited and hop + 1 < hops:
+                visited.add(key)
+                frontier.append((cid2, hop + 1))
+
+    items = sorted(best.values(), key=lambda c: c["score"], reverse=True)
+    return items[:cap]

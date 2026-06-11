@@ -4,6 +4,7 @@ data/
 .venv/
 *.egg-info/
 .DS_Store
+.claude/settings.local.json
 
 # abandoned image-composite experiments (UI is pure-code now)
 djbot/web/assets/

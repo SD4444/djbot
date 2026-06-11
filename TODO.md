@@ -5,12 +5,24 @@ _Last session: 2026‑06‑09. Phase 4 live + a big cosine/TIDAL/UX push. See
 
 ## ▶️ Pick up here (next session)
 
-### 1. Steer‑through‑sound (the deeper cosine integration)
-The fader currently plans a path over your **908 pool** (now with a sonic nudge from
-`Weights.sonic`). The big version: plan the path across the **whole 1.9M cosine universe** —
-generate candidates from cosine, enrich them (BPM/key) on the fly, then steer. Blocker =
-live‑enrich latency (a few seconds/track); needs a UX (progressive fill / pre‑enrich top‑N).
-Best built interactively, not overnight.
+### 1. ✅ Steer‑through‑sound (the deeper cosine integration) — SHIPPED
+The fader can now plan across the **whole 1.9M cosine universe**, not just the local pool.
+- `cosine.neighbourhood()` walks similar→similar a couple hops to harvest a broad sonic
+  candidate set (hop‑decayed scores, deduped).
+- **Plan phase** `/api/steer?id=…&intensity=…&universe=1` — instant: steers over the
+  neighbourhood tracks already enriched/mixable, ranked with universe‑wide sonic scores,
+  topping up from the local pool so the path is always full‑depth. Returns `pending`
+  (universe tracks not yet read) + meta.
+- **Harvest phase** `/api/harvest?id=…&n=6` — the progressive‑fill answer to the enrich‑
+  latency blocker: pre‑enriches (BPM/key/TIDAL) the top‑N un‑read neighbours, upserts them,
+  so the next plan can mix through them. Bounded by N + a wall‑clock budget.
+- **UI:** Steer panel has a "⊕ steer through SOUND" toggle + a "⊕ read N more" harvest button
+  with a live `universe · N mixable · M awaiting a read` status.
+- Verified live: climb (123→136) + cool‑down (125→119) paths; a harvested universe track
+  ("Aguamentis") shows up in the path after a read. Server must run from `.venv` for the read.
+
+Next‑level (later): parallelise harvest enrichment (currently sequential under a lock to keep
+SQLite writes safe); auto‑prefetch the top neighbours in the background while you mix.
 
 ### 2. Calibrate `recommender.Weights` to Simon's ear
 Get 2–3 setlists Simon considers cleanly mixed; fit harmonic/bpm/energy/curation/steer/**sonic**

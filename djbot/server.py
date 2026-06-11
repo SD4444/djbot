@@ -13,6 +13,13 @@ API (all GET, JSON out):
     /api/next?id=…&dir=any          -> ranked next tracks (mode 1)
     /api/runway?id=…&depth=3        -> a flowing N-track runway (mode 2)
     /api/steer?id=…&intensity=0.5   -> a steered path; intensity -1..1 (mode 3, the fader)
+        &universe=1                 -> steer THROUGH SOUND: candidates from the whole
+                                       cosine universe (the seed's sonic neighbourhood),
+                                       not just the local pool; returns `pending` tracks
+                                       awaiting a read + universe meta
+    /api/harvest?id=…&n=6           -> pre-enrich (BPM/key/TIDAL) the top-N not-yet-mixable
+                                       tracks in the seed's sonic neighbourhood so the next
+                                       universe-steer can plan through them (progressive fill)
 """
 
 from __future__ import annotations
@@ -20,6 +27,7 @@ from __future__ import annotations
 import argparse
 import datetime
 import json
+import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -67,6 +75,8 @@ class _Panel:
         self.by_id = {t.id: t for t in self.pool}
         # Pool usable for mixing = tracks we can actually beatmatch/key-match.
         self.mixable = [t for t in self.pool if t.bpm and t.camelot]
+        # Serialises catalog writes + pool swaps across enrich/harvest threads.
+        self._enrich_lock = threading.Lock()
 
     def find(self, query: str) -> Track | None:
         if query in self.by_id:
@@ -152,6 +162,170 @@ class _Panel:
         data = self._load_sessions()
         return next((s for s in data["sessions"] if s["id"] == sid), {"error": "not found"})
 
+    def _mixable_track(self, track_id: str) -> Track | None:
+        """The pool track for `track_id` if it's mixable (has bpm+key), else None."""
+        t = self.by_id.get(track_id)
+        return t if (t and t.bpm and t.camelot) else None
+
+    # ---- enrich-on-add (read a discovery's DNA, grow the pool) ----
+    def ensure_enriched(self, artist: str, title: str) -> dict:
+        """Read a discovery's DNA (TIDAL availability + Discogs genre + librosa
+        BPM/key), upsert it into the catalog, and refresh the in-memory pool.
+
+        Returns the merged track as JSON plus enrichment flags. Serialised by
+        `_enrich_lock` so concurrent harvest workers don't race on the SQLite
+        write or the in-memory pool swap.
+        """
+        if not artist or not title:
+            return {"error": "artist & title required"}
+        existing = self._mixable_track(make_id(artist, title))
+        if existing is not None:
+            out = _track_json(existing)
+            out.update({"enriched": True, "analysed": True,
+                        "tidal_available": bool(existing.tidal_id)})
+            return out
+
+        base = Track(artist=artist, title=title)
+        deltas: list[Track] = [base]
+
+        # genre (best-effort Discogs) — also helps audio's tempo-fold
+        dtok = config.get_key("discogs_token")
+        if dtok:
+            try:
+                deltas += enrichment.enrich_track(base, discogs=providers.DiscogsClient(dtok))
+            except Exception:
+                pass
+        genre = next((d.genre for d in deltas if d.genre), None)
+        if genre:
+            base.genre = genre
+
+        # BPM/key (librosa over a free preview) — needs the venv. This is the
+        # slow part; we run it OUTSIDE the lock so harvests can analyse in
+        # parallel, then serialise only the catalog write + pool swap below.
+        analysed = False
+        ok, _why = audio.available()
+        if ok:
+            try:
+                ad = enrichment.analyze_track(base)
+                if ad:
+                    deltas.append(ad)
+                    analysed = True
+            except Exception:
+                pass
+
+        # TIDAL availability + id
+        tinfo = None
+        try:
+            tinfo = tidal.find(artist, title)
+        except Exception:
+            tinfo = None
+        if tinfo and tinfo.get("tidal_id"):
+            deltas.append(Track(id=base.id, artist=artist, title=title,
+                                tidal_id=str(tinfo["tidal_id"])))
+
+        with self._enrich_lock:
+            with Catalog(self.db_path) as cat:
+                cat.upsert(deltas)
+                merged = cat.get(base.id)
+            # refresh the live pool so it's immediately mixable/searchable
+            self.pool = [t for t in self.pool if t.id != merged.id] + [merged]
+            self.by_id[merged.id] = merged
+            self.mixable = [t for t in self.pool if t.bpm and t.camelot]
+
+        out = _track_json(merged)
+        out.update({
+            "enriched": bool(merged.camelot and merged.bpm),
+            "analysed": analysed,
+            "audio_available": ok,
+            "tidal_available": bool(tinfo),
+        })
+        return out
+
+    # ---- steer-through-sound: plan a path across the cosine universe ----
+    def _neighbourhood(self, seed: Track, *, hops=2, breadth=18, cap=80) -> list[dict]:
+        try:
+            return cosine.neighbourhood(seed.artist, seed.title,
+                                        hops=hops, breadth=breadth, cap=cap)
+        except cosine.CosineError:
+            raise
+        except Exception:
+            return []
+
+    def steer_universe(self, seed: Track, intensity: float, *, depth: int = 5,
+                       weights: rec.Weights = rec.Weights()) -> dict:
+        """Steer a path whose candidates come from the whole cosine universe.
+
+        The seed's sonic neighbourhood (harvested across hops) supplies the
+        candidate pool *and* the sonic scores. Only tracks already enriched
+        (bpm+key, hence mixable) can be planned through now; the rest are
+        returned as `pending` for an explicit `/api/harvest` pre-enrich pass.
+        We top up thin candidate sets from the local mixable pool (sonic-
+        neighbours first) so the fader always returns a full-depth path.
+        """
+        # One pass over the neighbourhood: collect sonic scores, the tracks
+        # already mixable (candidates), and the rest (pending an enrich pass).
+        nb = self._neighbourhood(seed)
+        sonic: dict[str, float] = {}
+        nb_mixable: list[Track] = []
+        pending: list[dict] = []
+        for c in nb:
+            cid = make_id(c["artist"], c["title"])
+            sc = c.get("score")
+            if isinstance(sc, (int, float)):
+                sonic[cid] = round(float(sc), 4)
+            m = self._mixable_track(cid)
+            if m is not None:
+                nb_mixable.append(m)
+            else:
+                pending.append({"artist": c["artist"], "title": c["title"],
+                                "score": c.get("score"), "url": c.get("url")})
+
+        # Candidate pool: universe-enriched first, then top up from the local
+        # mixable pool (sonic neighbours ahead of the rest) so steer has room.
+        seen = {seed.id} | {t.id for t in nb_mixable}
+        topup = sorted(
+            (t for t in self.mixable if t.id not in seen),
+            key=lambda t: sonic.get(t.id, 0.0), reverse=True,
+        )
+        candidates = nb_mixable + topup
+
+        path = rec.steer(seed, candidates, intensity, depth=depth,
+                         weights=weights, sonic_scores=sonic)
+        return {
+            "now": _track_json(seed),
+            "intensity": intensity,
+            "universe": True,
+            "path": [_sugg_json(s) for s in path],
+            "pending": pending[:12],
+            "meta": {"neighbourhood": len(nb), "universe_mixable": len(nb_mixable),
+                     "pending": len(pending)},
+        }
+
+    def harvest(self, seed: Track, n: int = 6, budget: float = 90.0) -> dict:
+        """Pre-enrich the top-N not-yet-mixable tracks in the seed's sonic
+        neighbourhood so the next universe-steer can plan through them.
+
+        Bounded by `n` and a wall-clock `budget`; enrichment is the slow part
+        (librosa over a preview), so this is the explicit "progressive fill"
+        step the UI fires behind a spinner. Returns per-track outcomes.
+        """
+        nb = self._neighbourhood(seed)
+        todo = [c for c in nb
+                if self._mixable_track(make_id(c["artist"], c["title"])) is None][:n]
+        results, gained, started = [], 0, time.time()
+        for c in todo:
+            if time.time() - started > budget:
+                break
+            r = self.ensure_enriched(c["artist"], c["title"])
+            ok = bool(r.get("enriched"))
+            gained += ok
+            results.append({"artist": c["artist"], "title": c["title"],
+                            "enriched": ok, "bpm": r.get("bpm"),
+                            "camelot": r.get("camelot"),
+                            "tidal": bool(r.get("tidal_available"))})
+        return {"now": _track_json(seed), "harvested": len(results),
+                "gained": gained, "results": results}
+
 
 class _Handler(BaseHTTPRequestHandler):
     panel: _Panel = None  # set on the server instance below
@@ -191,70 +365,7 @@ class _Handler(BaseHTTPRequestHandler):
         return out
 
     def _enrich(self, artist: str, title: str) -> dict:
-        """Read a discovery's DNA (TIDAL availability + Discogs genre + librosa
-        BPM/key), upsert it into the catalog, and refresh the in-memory pool."""
-        if not artist or not title:
-            return {"error": "artist & title required"}
-        existing = self.panel.by_id.get(make_id(artist, title))
-        if existing is not None and existing.bpm and existing.camelot:
-            out = _track_json(existing)
-            out.update({"enriched": True, "analysed": True,
-                        "tidal_available": bool(existing.tidal_id)})
-            return out
-
-        base = Track(artist=artist, title=title)
-        deltas: list[Track] = [base]
-
-        # genre (best-effort Discogs) — also helps audio's tempo-fold
-        dtok = config.get_key("discogs_token")
-        if dtok:
-            try:
-                deltas += enrichment.enrich_track(base, discogs=providers.DiscogsClient(dtok))
-            except Exception:
-                pass
-        genre = next((d.genre for d in deltas if d.genre), None)
-        if genre:
-            base.genre = genre
-
-        # BPM/key (librosa over a free preview) — needs the venv
-        analysed = False
-        ok, _why = audio.available()
-        if ok:
-            try:
-                ad = enrichment.analyze_track(base)
-                if ad:
-                    deltas.append(ad)
-                    analysed = True
-            except Exception:
-                pass
-
-        # TIDAL availability + id
-        tinfo = None
-        try:
-            tinfo = tidal.find(artist, title)
-        except Exception:
-            tinfo = None
-        if tinfo and tinfo.get("tidal_id"):
-            deltas.append(Track(id=base.id, artist=artist, title=title,
-                                tidal_id=str(tinfo["tidal_id"])))
-
-        with Catalog(self.panel.db_path) as cat:
-            cat.upsert(deltas)
-            merged = cat.get(base.id)
-
-        # refresh the live pool so it's immediately mixable/searchable
-        self.panel.pool = [t for t in self.panel.pool if t.id != merged.id] + [merged]
-        self.panel.by_id[merged.id] = merged
-        self.panel.mixable = [t for t in self.panel.pool if t.bpm and t.camelot]
-
-        out = _track_json(merged)
-        out.update({
-            "enriched": bool(merged.camelot and merged.bpm),
-            "analysed": analysed,
-            "audio_available": ok,
-            "tidal_available": bool(tinfo),
-        })
-        return out
+        return self.panel.ensure_enriched(artist, title)
 
     def do_GET(self):
         u = urlparse(self.path)
@@ -343,11 +454,27 @@ class _Handler(BaseHTTPRequestHandler):
         if path == "/api/steer":
             intensity = float((qs.get("intensity") or ["0"])[0])
             depth = int((qs.get("depth") or ["5"])[0])
+            universe = (qs.get("universe") or ["0"])[0] not in ("0", "", "false")
+            if universe:
+                try:
+                    return self._send(self.panel.steer_universe(
+                        seed, intensity, depth=depth))
+                except cosine.CosineError as e:
+                    return self._send({"now": _track_json(seed), "error": str(e),
+                                       "path": []})
             path_ = rec.steer(seed, self.panel.mixable, intensity, depth=depth,
                               sonic_scores=self._sonic_scores(seed))
             return self._send({"now": _track_json(seed),
                                "intensity": intensity,
                                "path": [_sugg_json(s) for s in path_]})
+
+        if path == "/api/harvest":
+            n = int((qs.get("n") or ["6"])[0])
+            try:
+                return self._send(self.panel.harvest(seed, n=n))
+            except cosine.CosineError as e:
+                return self._send({"now": _track_json(seed), "error": str(e),
+                                   "harvested": 0, "gained": 0, "results": []})
 
         if path == "/api/vibe":
             # cosine.club audio-similarity over the whole ~1.9M universe.
