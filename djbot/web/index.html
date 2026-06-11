@@ -257,6 +257,14 @@
   .chip.ok{color:var(--lime);border-color:rgba(124,255,196,.45)}
   .chip.warn{color:var(--amber);border-color:rgba(255,194,75,.45)}
   .chip.nokey{color:var(--amber);border-color:rgba(255,194,75,.5);background:rgba(255,194,75,.08)}
+  /* in-app 30s preview player buttons */
+  .play{flex:none;cursor:pointer;font-family:"Share Tech Mono",monospace;font-size:12px;line-height:1;padding:0;
+    width:32px;height:32px;border-radius:50%;border:1px solid rgba(47,244,255,.4);background:rgba(47,244,255,.08);
+    color:var(--cyan);display:flex;align-items:center;justify-content:center;transition:.14s}
+  .play:hover{background:rgba(47,244,255,.2);box-shadow:var(--tc)}
+  .play.playing{color:var(--magenta);border-color:rgba(255,62,165,.55);background:rgba(255,62,165,.14);text-shadow:var(--tm)}
+  .play.dead{opacity:.4;cursor:default;border-style:dashed}
+  .play.nowplay{width:auto;height:auto;border-radius:7px;padding:6px 13px;margin-top:9px;letter-spacing:.12em;font-size:11px}
   /* similarity % as the lead on cosine (Vibe) cards */
   .rank.sim{color:var(--violet);text-shadow:var(--tv);display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1;min-width:48px}
   .rank.sim .pv{white-space:nowrap}
@@ -337,6 +345,7 @@
 </style>
 </head>
 <body>
+<audio id="player" preload="none"></audio>
 <div class="cosmos">
   <div class="neb a"></div><div class="neb b"></div>
   <div class="galaxy"></div>
@@ -381,6 +390,7 @@
             <div class="name" id="nowTitle">— no signal —</div>
             <div class="art" id="nowArtist">set a current track to begin</div>
             <div class="compat" id="compat">MIX&nbsp;▸&nbsp;<b>—</b></div>
+            <button class="play nowplay" id="nowPlay" data-lbl="▶ PREVIEW" style="display:none" title="play a free 30s preview">▶ PREVIEW</button>
           </div>
         </div>
         <div class="statline">
@@ -612,6 +622,7 @@ document.addEventListener("click", e=>{ if(!e.target.closest(".search")) $("#res
 /* set current track from search — starts a fresh set path */
 async function selectNow(t){
   if(!t) return;
+  player.pause(); stopPreview();
   state.now = t; state.queue = [];
   $("#results").classList.remove("on"); $("#q").value="";
   showNow(t); logTrack(t); renderQueue(); await run();
@@ -661,7 +672,33 @@ function showNow(t){
   $("#pPeriod").textContent = bpm? Math.round(60000/bpm):"—";
   const hz=tonicHz(cam);
   $("#pTonic").textContent = hz? hz.toFixed(1):"—";
+  // reset + reveal the preview button for the new track
+  const np=$("#nowPlay"); np.style.display="inline-block";
+  np.classList.remove("playing","dead"); np.textContent=np.dataset.lbl; np.title="play a free 30s preview";
 }
+
+/* ---------- in-app 30s preview player ---------- */
+const player = $("#player");
+let playKey = null, playBtn = null;
+player.addEventListener("ended", stopPreview);
+function stopPreview(){
+  if(playBtn){ playBtn.classList.remove("playing"); playBtn.textContent = playBtn.dataset.lbl||"▶"; }
+  playKey = null; playBtn = null;
+}
+async function playPreview(artist, title, btn){
+  const key = (artist+" — "+title).toLowerCase();
+  if(playKey===key){ player.pause(); stopPreview(); return; }   // toggle the same track off
+  if(playBtn) { player.pause(); stopPreview(); }                // switch from another
+  const lbl = btn.dataset.lbl || "▶";
+  btn.textContent = "…";
+  let url=null;
+  try{ const d=await api("/api/preview?artist="+encodeURIComponent(artist)+"&title="+encodeURIComponent(title)); url=d&&d.url; }catch(e){}
+  if(!url){ btn.classList.add("dead"); btn.textContent = lbl.includes("PREVIEW")?"✕ NO PREVIEW":"✕"; btn.title="no free preview found"; return; }
+  player.src=url; try{ await player.play(); }catch(e){ stopPreview(); return; }
+  playKey=key; playBtn=btn;
+  btn.classList.add("playing"); btn.textContent = lbl.includes("PREVIEW")?"⏸ STOP":"⏸";
+}
+$("#nowPlay").onclick = ()=>{ if(state.now) playPreview(state.now.artist, state.now.title, $("#nowPlay")); };
 
 /* ---------- suggestion source (My Engine / Vibe / Vibe+Mix) ---------- */
 document.querySelectorAll(".src").forEach(s=>s.onclick=()=>{
@@ -796,10 +833,13 @@ function renderVibe(data, source, runway){
     return `<div class="card disc" data-k="${t._k}">
       <div class="rank${sim?' sim':''}">${lead}</div>
       <div class="cbody"><div class="ct">${esc(t.artist)} — ${esc(t.title)}</div><div class="cr">${sub}</div></div>
+      <button class="play" data-play data-lbl="▶" title="preview 30s">▶</button>
       <div class="chips">${chips}<span class="chip tidal">··</span></div></div>`;
   }).join("");
   L.querySelectorAll(".card[data-k]").forEach(c=>c.onclick=(e)=>{
     const t=vibeMap[c.dataset.k]; if(!t) return;
+    const pb=e.target.closest("[data-play]");
+    if(pb){ e.stopPropagation(); playPreview(t.artist,t.title,pb); return; }
     if(e.target.closest("[data-listen]")){ if(t.url) window.open(t.url,"_blank","noopener"); return; }
     if(t.in_pool && t.id) enqueue({id:t.id,artist:t.artist,title:t.title,camelot:t.camelot,bpm:t.bpm,genre:t.genre});
     else enrichAdd(c, t);
@@ -867,10 +907,15 @@ function render(items){
     return `<div class="card" data-id="${enc(t.id)}">
       <div class="rank">${String(i+1).padStart(2,"0")}</div>
       <div class="cbody"><div class="ct">${esc(t.artist)} — ${esc(t.title)}</div><div class="cr">${reasons||"&nbsp;"}</div></div>
+      <button class="play" data-play data-lbl="▶" title="preview 30s">▶</button>
       <div class="chips">${keyBpmChips(t)}${gen?`<span class="chip gen">${esc(gen)}</span>`:""}<span class="chip tidal">··</span></div>
     </div>`;
   }).join("");
-  L.querySelectorAll(".card[data-id]").forEach(c=>c.onclick=()=>enqueue(suggMap[dec(c.dataset.id)]));
+  L.querySelectorAll(".card[data-id]").forEach(c=>{
+    c.onclick=()=>enqueue(suggMap[dec(c.dataset.id)]);
+    const pb=c.querySelector("[data-play]");
+    if(pb) pb.onclick=(e)=>{ e.stopPropagation(); const t=suggMap[dec(c.dataset.id)]; playPreview(t.artist,t.title,pb); };
+  });
   tidalFlags(L, items);
 }
 

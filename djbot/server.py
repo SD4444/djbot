@@ -12,6 +12,8 @@ API (all GET, JSON out):
     /api/search?q=…                 -> local-pool tracks matching a query (now-playing picker)
     /api/tsearch?q=…                -> whole-TIDAL-catalog matches for a seed search; tap one
                                        in the UI to enrich-on-select it into the pool
+    /api/preview?artist=&title=     -> a free 30s preview clip URL (iTunes/Deezer) to audition
+                                       a track in-app (now-playing + suggestion ▶ buttons)
     /api/next?id=…&dir=any          -> ranked next tracks (mode 1)
     /api/runway?id=…&depth=3        -> a flowing N-track runway (mode 2)
     /api/steer?id=…&intensity=0.5   -> a steered path; intensity -1..1 (mode 3, the fader)
@@ -31,6 +33,8 @@ import datetime
 import json
 import threading
 import time
+from concurrent.futures import (ThreadPoolExecutor, as_completed,
+                                TimeoutError as FuturesTimeout)
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -321,17 +325,30 @@ class _Panel:
         nb = self._neighbourhood(seed)
         todo = [c for c in nb
                 if self._mixable_track(make_id(c["artist"], c["title"])) is None][:n]
-        results, gained, started = [], 0, time.time()
-        for c in todo:
-            if time.time() - started > budget:
-                break
-            r = self.ensure_enriched(c["artist"], c["title"], fallback_genre)
-            ok = bool(r.get("enriched"))
-            gained += ok
-            results.append({"artist": c["artist"], "title": c["title"],
-                            "enriched": ok, "bpm": r.get("bpm"),
-                            "camelot": r.get("camelot"),
-                            "tidal": bool(r.get("tidal_available"))})
+        # Enrich in parallel: the slow part (preview fetch + librosa) runs
+        # outside _enrich_lock, so the threads overlap; only the catalog write
+        # is serialised. Cuts a 6-track read from ~30s to ~10s.
+        results, gained = [], 0
+        ex = ThreadPoolExecutor(max_workers=4)
+        futs = {ex.submit(self.ensure_enriched, c["artist"], c["title"],
+                          fallback_genre): c for c in todo}
+        try:
+            for fut in as_completed(futs, timeout=budget):
+                try:
+                    r = fut.result()
+                except Exception:
+                    continue
+                ok = bool(r.get("enriched"))
+                gained += ok
+                c = futs[fut]
+                results.append({"artist": c["artist"], "title": c["title"],
+                                "enriched": ok, "bpm": r.get("bpm"),
+                                "camelot": r.get("camelot"),
+                                "tidal": bool(r.get("tidal_available"))})
+        except FuturesTimeout:
+            pass  # budget hit — return what finished
+        finally:
+            ex.shutdown(wait=False, cancel_futures=True)
         return {"now": _track_json(seed), "harvested": len(results),
                 "gained": gained, "results": results}
 
@@ -440,6 +457,18 @@ class _Handler(BaseHTTPRequestHandler):
                 "camelot": (qs.get("camelot") or [None])[0],
                 "bpm": (qs.get("bpm") or [None])[0],
                 "genre": (qs.get("genre") or [None])[0]}))
+
+        if path == "/api/preview":
+            # free 30s preview clip (iTunes/Deezer) to audition a track in-app
+            a = (qs.get("artist") or [""])[0]
+            t = (qs.get("title") or [""])[0]
+            if not a:
+                return self._send({"error": "artist required"}, status=400)
+            try:
+                url = audio.find_preview_url(a, t)
+            except Exception:
+                url = None
+            return self._send({"url": url})
 
         if path == "/api/tidal":
             a = (qs.get("artist") or [""])[0]
