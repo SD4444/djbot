@@ -14,17 +14,19 @@ from __future__ import annotations
 import sys
 import time
 
-from djbot import server
-from djbot.models import make_id
+from djbot import cosine, server
+from djbot.catalog import Catalog
+from djbot.models import Track, make_id
 
-# Strong scene entry points — cosine harvests the neighbourhood around each.
+# Strong scene entry points keyed by the canonical genre cosine harvests into.
+# Each seed's neighbourhood inherits the genre when Discogs can't label it.
 SEEDS = {
-    "goa/psy": [
+    "goa_psytrance": [
         ("Astrix", "Deep Jungle Walk"), ("Vini Vici", "The Tribe"),
         ("Hallucinogen", "LSD"), ("Shpongle", "Divine Moments of Truth"),
         ("Ural 13 Diktators", "Le Voyage"),
     ],
-    "dnb": [
+    "drum_and_bass": [
         ("Calibre", "Mr Right On"), ("Noisia", "Stigma"),
         ("LTJ Bukem", "Horizons"), ("Alix Perez", "Forsaken"),
     ],
@@ -37,7 +39,7 @@ SEEDS = {
 N_PER_SEED = 6
 
 
-def main() -> int:
+def seed() -> int:
     panel = server._Panel("data/catalog.db")
     start_total = len(panel.mixable)
     print(f"start: {len(panel.pool)} tracks ({start_total} mixable)\n", flush=True)
@@ -47,13 +49,13 @@ def main() -> int:
         for artist, title in seeds:
             t0 = time.time()
             # ensure the seed itself is in the pool so it can anchor a harvest
-            panel.ensure_enriched(artist, title)
-            seed = panel.by_id.get(make_id(artist, title))
-            if seed is None:
+            panel.ensure_enriched(artist, title, fallback_genre=genre)
+            s = panel.by_id.get(make_id(artist, title))
+            if s is None:
                 print(f"  ✗ seed unresolved: {artist} — {title}", flush=True)
                 continue
             try:
-                res = panel.harvest(seed, n=N_PER_SEED)
+                res = panel.harvest(s, n=N_PER_SEED, fallback_genre=genre)
             except Exception as e:
                 print(f"  ! harvest failed {artist} — {title}: {e}", flush=True)
                 continue
@@ -66,5 +68,24 @@ def main() -> int:
     return 0
 
 
+def backfill() -> int:
+    """Label already-seeded genre-less tracks by re-walking each seed's
+    neighbourhood (cosine is cached, so this needs no audio analysis)."""
+    with Catalog("data/catalog.db") as cat:
+        pool = {t.id: t for t in cat.all_tracks()}
+        updates: list[Track] = []
+        for genre, seeds in SEEDS.items():
+            for artist, title in seeds:
+                for c in cosine.neighbourhood(artist, title):
+                    tr = pool.get(make_id(c["artist"], c["title"]))
+                    if tr and tr.bpm and tr.camelot and not tr.genre:
+                        updates.append(Track(id=tr.id, artist=tr.artist,
+                                             title=tr.title, genre=genre))
+                        tr.genre = genre  # avoid re-queuing across seeds
+        cat.upsert(updates)
+    print(f"backfilled genre on {len(updates)} tracks", flush=True)
+    return 0
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(backfill() if "--backfill" in sys.argv else seed())

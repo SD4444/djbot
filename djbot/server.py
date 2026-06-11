@@ -170,13 +170,16 @@ class _Panel:
         return t if (t and t.bpm and t.camelot) else None
 
     # ---- enrich-on-add (read a discovery's DNA, grow the pool) ----
-    def ensure_enriched(self, artist: str, title: str) -> dict:
+    def ensure_enriched(self, artist: str, title: str,
+                        fallback_genre: str | None = None) -> dict:
         """Read a discovery's DNA (TIDAL availability + Discogs genre + librosa
         BPM/key), upsert it into the catalog, and refresh the in-memory pool.
 
-        Returns the merged track as JSON plus enrichment flags. Serialised by
-        `_enrich_lock` so concurrent harvest workers don't race on the SQLite
-        write or the in-memory pool swap.
+        `fallback_genre` labels the track when Discogs has no genre — used when
+        harvesting a known-genre seed's neighbourhood (those neighbours are
+        almost always the same genre). Returns the merged track as JSON plus
+        enrichment flags. Serialised by `_enrich_lock` so concurrent harvest
+        workers don't race on the SQLite write or the in-memory pool swap.
         """
         if not artist or not title:
             return {"error": "artist & title required"}
@@ -197,7 +200,7 @@ class _Panel:
                 deltas += enrichment.enrich_track(base, discogs=providers.DiscogsClient(dtok))
             except Exception:
                 pass
-        genre = next((d.genre for d in deltas if d.genre), None)
+        genre = next((d.genre for d in deltas if d.genre), None) or fallback_genre
         if genre:
             base.genre = genre
 
@@ -303,14 +306,18 @@ class _Panel:
                      "pending": len(pending)},
         }
 
-    def harvest(self, seed: Track, n: int = 6, budget: float = 90.0) -> dict:
+    def harvest(self, seed: Track, n: int = 6, budget: float = 90.0,
+                fallback_genre: str | None = None) -> dict:
         """Pre-enrich the top-N not-yet-mixable tracks in the seed's sonic
         neighbourhood so the next universe-steer can plan through them.
 
         Bounded by `n` and a wall-clock `budget`; enrichment is the slow part
         (librosa over a preview), so this is the explicit "progressive fill"
-        step the UI fires behind a spinner. Returns per-track outcomes.
+        step the UI fires behind a spinner. Neighbours inherit `fallback_genre`
+        (default: the seed's own genre) when Discogs can't label them. Returns
+        per-track outcomes.
         """
+        fallback_genre = fallback_genre or seed.genre
         nb = self._neighbourhood(seed)
         todo = [c for c in nb
                 if self._mixable_track(make_id(c["artist"], c["title"])) is None][:n]
@@ -318,7 +325,7 @@ class _Panel:
         for c in todo:
             if time.time() - started > budget:
                 break
-            r = self.ensure_enriched(c["artist"], c["title"])
+            r = self.ensure_enriched(c["artist"], c["title"], fallback_genre)
             ok = bool(r.get("enriched"))
             gained += ok
             results.append({"artist": c["artist"], "title": c["title"],
